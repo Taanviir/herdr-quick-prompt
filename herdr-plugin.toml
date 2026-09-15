@@ -1,0 +1,20 @@
+id = "taanviir.quick-prompt"
+name = "Quick Prompt"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Pick an agent, type a prompt, launch it in a new tab"
+platforms = ["linux", "macos", "windows"]
+
+[[actions]]
+id = "open"
+title = "Quick Prompt"
+contexts = ["workspace"]
+command = ["node", "bin/open.js"]
+
+[[panes]]
+id = "picker"
+title = "Quick Prompt"
+placement = "popup"
+width = "60%"
+height = 18
+command = ["node", "bin/picker.js"]
