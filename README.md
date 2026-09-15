@@ -18,12 +18,11 @@ prompt for you.
 ## Install
 
 ```bash
-git clone <this repo> ~/projects/quick-prompt-herdr-plugin
-herdr plugin link ~/projects/quick-prompt-herdr-plugin
+herdr plugin install <owner>/herdr-quick-prompt
 ```
 
-Requires Node (any recent version) on `PATH`. There are no dependencies and no
-build step.
+Requires **Node 18 or newer** on `PATH` — that is the only dependency, and there
+is no build step.
 
 Herdr plugins cannot register their own keybindings, so add one to
 `~/.config/herdr/config.toml`:
@@ -72,14 +71,25 @@ herdr agent read qp-codex --source recent-unwrapped --lines 120
 | `bin/open.js` | Action entrypoint; resolves the caller's cwd and opens the popup |
 | `bin/picker.js` | The modal TUI |
 | `bin/launch.js` | Detached worker: creates the tab, starts the agent, sends the prompt |
-| `lib/` | Herdr CLI wrapper, agent catalog, text editor buffer, render helpers |
+| `lib/` | Herdr CLI wrapper, agent catalog, text buffer, terminal-width helpers |
 
 The picker hands off to a detached worker and exits immediately, so the modal
-never sits there blocking while an agent boots. Because agent TUIs keep
-repainting for a moment after Herdr reports them ready — and swallow keystrokes
-while they do — the worker waits for `interactive_ready`, sends the prompt, then
-confirms it actually landed before retrying. Failures surface as a Herdr
-notification.
+never sits there blocking while an agent boots.
+
+The worker delivers the prompt one of two ways. Agents whose CLI takes a prompt
+as a launch argument get it that way:
+
+```bash
+herdr agent start qp-claude --kind claude --pane <p> -- "refactor the auth module"
+```
+
+The agent has the prompt before its TUI paints, which is both faster and immune
+to a startup repaint eating the keystrokes. Everything else falls back to typing
+into the TUI: wait for `interactive_ready`, send, then confirm the text actually
+landed before retrying. Failures surface as a Herdr notification.
+
+Set `QUICK_PROMPT_NO_INLINE=1` to force the keystroke path, for comparing the two
+when an agent misbehaves with a launch argument.
 
 The agent list is read from `herdr agent start --help` at runtime, so new agent
 kinds appear as soon as Herdr supports them. Recents live in
@@ -99,3 +109,8 @@ To try the picker outside a popup, run it in any pane:
 ```bash
 QUICK_PROMPT_CWD="$PWD" node bin/picker.js
 ```
+
+Text handling works in grapheme clusters and terminal cells rather than UTF-16
+units, so CJK, emoji and combining accents wrap and delete as single visible
+characters. `lib/text.js` owns that; nothing else should be measuring with
+`.length`.

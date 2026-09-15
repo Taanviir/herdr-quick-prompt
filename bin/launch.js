@@ -5,6 +5,7 @@
 
 const fs = require("node:fs");
 const { run, notify, HerdrError } = require("../lib/herdr");
+const { supportsInlinePrompt } = require("../lib/agents");
 
 const START_ATTEMPTS = 12;
 const START_RETRY_MS = 400;
@@ -66,21 +67,28 @@ function createTab({ workspace, cwd, label }) {
 
 // A freshly created tab may not be at its interactive prompt yet, and
 // `agent start` requires that, so retry briefly before giving up.
-function startAgent(name, kind, pane) {
+//
+// `inline` is passed through to the agent's own CLI after `--`, which hands the
+// agent its prompt before its TUI even paints.
+function startAgent(name, kind, pane, inline) {
+  const args = ["agent", "start", name, "--kind", kind, "--pane", pane];
+  if (inline) args.push("--", inline);
+
   let last = "agent did not start";
 
   for (let attempt = 0; attempt < START_ATTEMPTS; attempt += 1) {
-    const res = run(["agent", "start", name, "--kind", kind, "--pane", pane], { check: false });
-    if (res.ok) return { ready: true };
+    const res = run(args, { check: false });
+    if (res.ok) return { started: true, ready: true };
 
     last = res.message;
-    // Startup reached the agent but it is waiting on a dialog: the name is live.
-    if (/agent_not_ready/i.test(last)) return { ready: false, message: last };
+    // Startup reached the agent but it is not idle: either a trust dialog, or
+    // an inline prompt it is already working on. Either way the name is live.
+    if (/agent_not_ready/i.test(last)) return { started: true, ready: false, message: last };
     if (!/pane|shell|prompt|busy|not_available/i.test(last)) break;
     sleep(START_RETRY_MS);
   }
 
-  throw new HerdrError(last);
+  return { started: false, message: last };
 }
 
 function main() {
@@ -92,9 +100,21 @@ function main() {
 
   const name = uniqueName(kind);
   const pane = createTab({ workspace, cwd, label: tabLabel(request) });
-  const started = startAgent(name, kind, pane);
 
-  if (!prompt) return;
+  const inline = prompt && supportsInlinePrompt(kind) ? prompt : null;
+  let delivered = Boolean(inline);
+  let started = startAgent(name, kind, pane, inline);
+
+  // The agent rejected our launch arguments rather than failing to start; try
+  // again bare and fall back to typing the prompt in.
+  if (!started.started && inline) {
+    delivered = false;
+    started = startAgent(name, kind, pane, null);
+  }
+  if (!started.started) throw new HerdrError(started.message);
+
+  // Delivered at launch: nothing left to type.
+  if (delivered || !prompt) return;
 
   if (!started.ready) {
     // Blocked on a trust or login dialog; wait for the user to clear it.
