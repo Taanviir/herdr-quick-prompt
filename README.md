@@ -5,14 +5,16 @@ prompt — Quick Prompt opens a new tab, starts that agent there, and delivers t
 prompt for you.
 
 ```
- Quick Prompt                        ~/projects/budgit
- ─────────────────────────────────────────────────────
- agent  cod▏
-  ▸ codex                                           ●
-    opencode                                        ●
-    mastracode                                      ○
- ─────────────────────────────────────────────────────
- ↑↓ select · type to filter · enter continue · esc cancel
+┌─ Quick Prompt ──────────────────────── ~/projects/budgit ─┐
+│                                                           │
+│   1 claude   2 codex   3 cursor   4 gemini    +18 ctrl+k  │
+│                                                           │
+│  › refactor the auth module to use the new token format   │
+│                                                           │
+│  → new tab                                        ctrl+t  │
+│                                                           │
+│  ⏎ launch · tab agent · ctrl+j newline · esc cancel       │
+└───────────────────────────────────────────────────────────┘
 ```
 
 ## Install
@@ -24,8 +26,20 @@ herdr plugin install <owner>/herdr-quick-prompt
 Requires **Node 18 or newer** on `PATH` — that is the only dependency, and there
 is no build step.
 
-Herdr plugins cannot register their own keybindings, so add one to
-`~/.config/herdr/config.toml`:
+Herdr plugins cannot register their own keybindings, so there is a second
+action that adds one for you:
+
+```bash
+herdr plugin action invoke taanviir.quick-prompt.setup
+```
+
+It appends the binding to your `config.toml`, backs up the previous file, and
+reloads Herdr. The default prefix is `ctrl+b`, so the binding is **ctrl+b** then
+**shift+c**. Set `QUICK_PROMPT_KEY` to bind something else, and if the key is
+already taken the action says so rather than shadowing it.
+
+To do it by hand instead, add this to `~/.config/herdr/config.toml` and run
+`herdr server reload-config`:
 
 ```toml
 [[keys.command]]
@@ -35,9 +49,6 @@ command = "taanviir.quick-prompt.open"
 description = "Quick Prompt"
 ```
 
-Then `herdr server reload-config`. The default prefix is `ctrl+b`, so the
-binding is **ctrl+b** then **shift+c**.
-
 You can also open it without a key:
 
 ```bash
@@ -46,18 +57,30 @@ herdr plugin action invoke taanviir.quick-prompt.open
 
 ## Using it
 
-**Agent step** — `↑`/`↓` to select, type to filter, `enter` to continue, `esc` to
-cancel. A filled dot marks agents found on your `PATH`; the rest are kinds Herdr
-supports but that are not installed here. Recently used agents sort to the top.
+Everything is on one screen, and the cursor starts in the prompt — just type and
+press `enter`.
 
-**Prompt step** — type the prompt, `enter` to launch, `ctrl+j` for a newline,
-`esc` to go back to the agent list (your draft is kept). Launching with an empty
-prompt just opens the agent in a new tab. Editing keys: `ctrl+a`/`ctrl+e`,
-`ctrl+w`, `ctrl+u`, arrows, backspace, delete.
+| Key | |
+| --- | --- |
+| `⏎` | launch (an empty prompt just opens the agent) |
+| `ctrl+j` | newline in the prompt |
+| `tab` / `shift+tab` | next / previous agent |
+| `alt+1`…`alt+9` | jump straight to a numbered agent |
+| `ctrl+k` | the full agent list, filterable by typing |
+| `ctrl+t` | destination: new tab → split right → split down |
+| `esc` | cancel |
 
-The new tab is labelled with the first line of your prompt, opens in the
-directory of the pane you invoked from, and the agent is named `qp-<kind>` so you
-can keep driving it from scripts:
+Editing keys work as you would expect: `ctrl+a`/`ctrl+e`, `ctrl+w`, `ctrl+u`,
+arrows, backspace, delete.
+
+Agents are ordered by what you used last, then by what is actually installed —
+a filled dot in the `ctrl+k` list marks agents found on your `PATH`, and the rest
+are kinds Herdr supports but that are not installed here. Your last agent and
+destination are remembered.
+
+A new tab is labelled with the first line of your prompt, the agent opens in the
+directory of the pane you invoked from, and it is named `qp-<kind>` so you can
+keep driving it from scripts:
 
 ```bash
 herdr agent read qp-codex --source recent-unwrapped --lines 120
@@ -67,8 +90,9 @@ herdr agent read qp-codex --source recent-unwrapped --lines 120
 
 | File | Role |
 | --- | --- |
-| `herdr-plugin.toml` | Manifest: the `open` action and the `picker` popup pane |
+| `herdr-plugin.toml` | Manifest: the `open` and `setup` actions, and the `picker` popup pane |
 | `bin/open.js` | Action entrypoint; resolves the caller's cwd and opens the popup |
+| `bin/setup.js` | Action entrypoint; writes the keybinding into `config.toml` |
 | `bin/picker.js` | The modal TUI |
 | `bin/launch.js` | Detached worker: creates the tab, starts the agent, sends the prompt |
 | `lib/` | Herdr CLI wrapper, agent catalog, text buffer, terminal-width helpers |
@@ -92,8 +116,8 @@ Set `QUICK_PROMPT_NO_INLINE=1` to force the keystroke path, for comparing the tw
 when an agent misbehaves with a launch argument.
 
 The agent list is read from `herdr agent start --help` at runtime, so new agent
-kinds appear as soon as Herdr supports them. Recents live in
-`HERDR_PLUGIN_STATE_DIR`.
+kinds appear as soon as Herdr supports them. Your recent agents and last
+destination live in `HERDR_PLUGIN_STATE_DIR`.
 
 ## Development
 
@@ -114,3 +138,8 @@ Text handling works in grapheme clusters and terminal cells rather than UTF-16
 units, so CJK, emoji and combining accents wrap and delete as single visible
 characters. `lib/text.js` owns that; nothing else should be measuring with
 `.length`.
+
+## Acknowledgements
+
+The idea for this came from [NEBULA](https://github.com/agentSystemLabs/nebula)
+by WebDevCody.

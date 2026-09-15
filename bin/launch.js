@@ -65,6 +65,26 @@ function createTab({ workspace, cwd, label }) {
   return pane;
 }
 
+function createSplit({ pane, cwd, direction }) {
+  if (!pane) throw new HerdrError("no pane to split; open Quick Prompt from a pane");
+
+  const args = ["pane", "split", pane, "--direction", direction, "--focus"];
+  if (cwd) args.push("--cwd", cwd);
+
+  const { result } = run(args);
+  const created = result.pane?.pane_id;
+  if (!created) throw new HerdrError("herdr did not return a pane for the split");
+  return created;
+}
+
+// Where the agent lands: its own tab, or a split beside the caller.
+function createTarget(request) {
+  if (request.destination === "right" || request.destination === "down") {
+    return createSplit({ pane: request.pane, cwd: request.cwd, direction: request.destination });
+  }
+  return createTab({ workspace: request.workspace, cwd: request.cwd, label: tabLabel(request) });
+}
+
 // A freshly created tab may not be at its interactive prompt yet, and
 // `agent start` requires that, so retry briefly before giving up.
 //
@@ -96,10 +116,10 @@ function main() {
   if (!file) process.exit(2);
 
   const request = readRequest(file);
-  const { kind, prompt, cwd, workspace } = request;
+  const { kind, prompt } = request;
 
   const name = uniqueName(kind);
-  const pane = createTab({ workspace, cwd, label: tabLabel(request) });
+  const pane = createTarget(request);
 
   const inline = prompt && supportsInlinePrompt(kind) ? prompt : null;
   let delivered = Boolean(inline);
