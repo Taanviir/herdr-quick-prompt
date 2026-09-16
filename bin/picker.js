@@ -82,9 +82,11 @@ const destination = () => DESTINATIONS[state.destination];
 
 // The chip row is the agents you actually have, plus whatever is selected. The
 // other twenty kinds Herdr knows about are noise until you go looking (ctrl+k).
+const installedChips = agents.filter((item) => item.installed);
+const chips = installedChips.length >= MIN_CHIPS ? installedChips : agents.slice(0, MIN_CHIPS);
 function chipAgents() {
-  const installed = agents.filter((item) => item.installed || item === agent());
-  return installed.length >= MIN_CHIPS ? installed : agents.slice(0, MIN_CHIPS);
+  if (!chips.includes(agent())) chips.push(agent());
+  return chips;
 }
 
 /* ---------- rendering ---------- */
@@ -149,6 +151,17 @@ function chipRow(inner) {
     if (used + next > room && shown.length > 0) break;
     used += next;
     shown.push(i);
+  }
+
+  // Keep the selected agent visible even when its chip is beyond the row's room.
+  const selected = chips.indexOf(agent());
+  if (!shown.includes(selected)) {
+    const selectedWidth = label(chips[selected], selected).length + 2;
+    while (shown.length && used + 1 + selectedWidth > room) {
+      const removed = shown.pop();
+      used -= label(chips[removed], removed).length + 2 + (shown.length ? 1 : 0);
+    }
+    shown.push(selected);
   }
 
   const row = shown
@@ -259,8 +272,8 @@ function dirsBody(inner, rows) {
   const gap = Math.max(1, inner - "directory".length - displayWidth(here));
   lines[0] = style.dim("directory") + " ".repeat(gap) + style.dim(here);
 
-  const { rows: wrapped, caret } = input.layout(inner - 2);
-  lines[1] = style.accent("› ") + style.bright(wrapped[0] ?? "");
+  const view = input.viewport(inner - 2);
+  lines[1] = style.accent("› ") + style.bright(view.text);
 
   const room = Math.max(1, rows - 3);
   const active = Math.min(state.overlay.index, entries.length - 1);
@@ -278,7 +291,7 @@ function dirsBody(inner, rows) {
     ? style.warn(state.overlay.error)
     : style.dim("↑↓ select · tab complete · ⏎ use · esc back");
 
-  return { lines, caret: { row: 1, col: 2 + Math.min(caret.col, inner - 3) } };
+  return { lines, caret: { row: 1, col: 2 + view.col } };
 }
 
 function chooseDirectory(value) {
@@ -300,6 +313,7 @@ function onDirsKey(chunk, key) {
 
   const edited = () => {
     overlay.index = 0;
+    overlay.selectionMoved = false;
   };
 
   switch (true) {
@@ -308,20 +322,24 @@ function onDirsKey(chunk, key) {
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
       overlay.index = Math.max(0, Math.min(overlay.index, entries.length - 1) - 1);
+      overlay.selectionMoved = true;
       break;
     case key.name === "down" || (key.ctrl && key.name === "n"):
       overlay.index = Math.min(entries.length - 1, overlay.index + 1);
+      overlay.selectionMoved = true;
       break;
     case key.name === "tab":
       // Complete into the input so you can keep drilling down.
       if (highlighted) {
         overlay.input = new Editor(`${shortenPath(highlighted, 4096)}/`);
         overlay.index = 0;
+        overlay.selectionMoved = false;
       }
       break;
     case chunk === "\r" || key.name === "return":
-      // A path you typed wins; otherwise take what is highlighted.
-      if (isDirectory(expand(input.text))) chooseDirectory(input.text);
+      // Navigation explicitly selects a suggestion; typing an exact path uses it.
+      if (overlay.selectionMoved && highlighted) chooseDirectory(highlighted);
+      else if (isDirectory(expand(input.text))) chooseDirectory(input.text);
       else if (highlighted) chooseDirectory(highlighted);
       else chooseDirectory(input.text);
       break;
@@ -459,6 +477,7 @@ function insertPasted(text) {
     const flat = clean.replace(/\n/g, "");
     if (state.overlay.type === "dirs") {
       state.overlay.input.insert(flat);
+      state.overlay.selectionMoved = false;
     } else {
       state.overlay.filter += flat.toLowerCase();
     }
@@ -480,6 +499,12 @@ function onMainKey(chunk, key) {
   state.notice = null;
 
   switch (true) {
+    case key.name === "up":
+      prompt.moveVertical(-1, content() - 2);
+      break;
+    case key.name === "down":
+      prompt.moveVertical(1, content() - 2);
+      break;
     case key.name === "escape":
       return quit(0);
     // \r launches; \n (ctrl+j) inserts a newline.

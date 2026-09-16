@@ -75,6 +75,9 @@ press `enter`.
 Editing keys work as you would expect: `ctrl+a`/`ctrl+e`, `ctrl+w`, `ctrl+u`,
 arrows, backspace, delete.
 
+Up/down moves between displayed prompt lines, including wrapped lines. Long
+directory paths scroll horizontally to keep the cursor visible.
+
 The numbered chips are the agents you actually have installed, so `alt+1`–`alt+9`
 always mean something. Their order is fixed on purpose — a number that points at
 a different agent depending on what you ran last is worse than no number at all —
