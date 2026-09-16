@@ -52,6 +52,7 @@ function picker(recovered = null, discarded = []) {
       readPrefs: () => ({ recents: [], directories: [] }),
       readFailedRequest: () => recovered,
       discardRequest: (file) => discarded.push(file),
+      sweepStaleRequests: () => {},
     },
     "../lib/dirs": {
       expand: (value) => value,
@@ -275,4 +276,32 @@ test("reading a draft sweeps the older and unreadable ones it passes", (t) => {
   assert.equal(found.request.prompt, "newest");
   assert.deepEqual(fs.readdirSync(dir), ["failed-request-3000000000000-3.json"],
     "only the draft that can still be offered is kept");
+});
+
+test("requests abandoned by a killed worker are swept, live ones are not", (t) => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-stale-test-"));
+  t.after(() => {
+    for (const name of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, name));
+    fs.rmdirSync(dir);
+  });
+
+  const state = load("lib/state.js", {}, "const STATE_DIR =");
+  state.context.process.env.HERDR_PLUGIN_STATE_DIR = dir;
+  const source = fs.readFileSync(path.resolve(__dirname, "../lib/state.js"), "utf8");
+  vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
+  const api = state.context.module.exports;
+
+  const body = JSON.stringify({ kind: "codex", prompt: "orphan" });
+  const orphan = path.join(dir, "request-1000000000000-1.json");
+  const live = path.join(dir, "request-2000000000000-2.json");
+  const draft = path.join(dir, "failed-request-3000000000000-3.json");
+  for (const file of [orphan, live, draft]) fs.writeFileSync(file, body);
+
+  const old = Date.now() - 2 * 60 * 60 * 1000;
+  fs.utimesSync(orphan, old / 1000, old / 1000);
+
+  api.sweepStaleRequests();
+  assert.equal(fs.existsSync(orphan), false, "a request older than any live launch is abandoned");
+  assert.equal(fs.existsSync(live), true, "a request that could still be in flight is left alone");
+  assert.equal(fs.existsSync(draft), true, "recoverable drafts are not requests and are not swept");
 });

@@ -13,7 +13,7 @@ const fs = require("node:fs");
 const { catalog } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, writeRequest, readFailedRequest, discardRequest } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, writeRequest, readFailedRequest, discardRequest, sweepStaleRequests } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
@@ -47,6 +47,7 @@ const originPane = process.env.QUICK_PROMPT_PANE ?? ctx.focused_pane_id ?? proce
 
 const prefs = readPrefs();
 const agents = catalog();
+sweepStaleRequests();
 const recovered = readFailedRequest();
 // Cleared once the draft has been taken up or thrown away, so neither happens twice.
 let recoveredFile = recovered?.file ?? null;
