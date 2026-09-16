@@ -105,15 +105,6 @@ herdr agent read qp-codex --source recent-unwrapped --lines 120
 
 ## How it works
 
-| File | Role |
-| --- | --- |
-| `herdr-plugin.toml` | Manifest: the `open` and `setup` actions, and the `picker` popup pane |
-| `bin/open.js` | Action entrypoint; resolves the caller's cwd and opens the popup |
-| `bin/setup.js` | Action entrypoint; writes the keybinding into `config.toml` |
-| `bin/picker.js` | The modal TUI |
-| `bin/launch.js` | Detached worker: creates the tab, starts the agent, sends the prompt |
-| `lib/` | Herdr CLI wrapper, agent catalog, text buffer, terminal-width helpers |
-
 The picker hands off to a detached worker and exits immediately, so the modal
 never sits there blocking while an agent boots.
 
@@ -156,33 +147,10 @@ A crash that happens before the picker starts — a missing Node, a broken
 install — leaves nothing there. Check `node --version` and
 `herdr plugin list` in that case.
 
-## Development
+## Contributing
 
-```bash
-herdr plugin link .                              # no build step
-herdr plugin action invoke taanviir.quick-prompt.open
-herdr plugin log list --plugin taanviir.quick-prompt
-herdr plugin unlink taanviir.quick-prompt
-```
-
-To try the picker outside a popup, run it in any pane:
-
-```bash
-QUICK_PROMPT_CWD="$PWD" node bin/picker.js
-```
-
-Text handling works in grapheme clusters and terminal cells rather than UTF-16
-units, so CJK, emoji and combining accents wrap and delete as single visible
-characters. `lib/text.js` owns that; nothing else should be measuring with
-`.length`.
-
-The screenshots above are generated, not cropped: `tools/screenshot.py` runs the
-picker on a pty at the popup's real size and draws the captured output, so they
-cannot drift from what the code actually prints.
-
-```bash
-python3 tools/screenshot.py docs/quick-prompt.png --type "refactor the auth module"
-```
+Running it from a checkout, the layout of the code, and the terminal quirks worth
+knowing before you change anything: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
 
