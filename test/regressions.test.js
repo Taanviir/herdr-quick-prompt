@@ -23,6 +23,27 @@ function load(relative, mocks = {}, stop) {
   return { context, evaluate: (code) => vm.runInContext(code, context) };
 }
 
+test("structured readiness errors preserve their code and do not restart an agent", () => {
+  const wrapper = load("lib/herdr.js", {
+    "node:child_process": {
+      spawnSync: () => ({ status: 1, stderr: JSON.stringify({
+        error: { code: "agent_not_ready", message: "Agent needs attention" },
+      }) }),
+    },
+  });
+  const result = wrapper.context.module.exports.run(["agent", "start"], { check: false });
+  assert.equal(result.code, "agent_not_ready");
+  assert.equal(result.message, "Agent needs attention");
+  let calls = 0;
+  const launcher = load("bin/launch.js", {
+    "../lib/herdr": { run: () => { calls++; return result; } },
+  }, "try {\n  main();");
+  const started = launcher.evaluate('startAgent("qp-test", "test", "pane", null)');
+  assert.equal(started.started, true);
+  assert.equal(started.ready, false);
+  assert.equal(calls, 1);
+});
+
 test("setup detects both TOML quote styles and treats punctuation literally", () => {
   for (const key of ["prefix+shift+c", "prefix+.", "prefix+["]) {
     for (const quote of ['"', "'"]) {
