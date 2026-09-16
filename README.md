@@ -1,8 +1,8 @@
 # Quick Prompt
 
 A [Herdr](https://herdr.dev) plugin. Press a key, pick a coding agent, type a
-prompt — Quick Prompt opens a new tab, starts that agent there, and delivers the
-prompt for you.
+prompt — Quick Prompt opens a new tab, starts that agent there, and hands it the
+prompt.
 
 ```
   1 claude   2 codex   3 cursor   4 opencode   5 pi           +17 ctrl+k
@@ -15,10 +15,20 @@ prompt for you.
 ⏎ launch · tab agent · ctrl+v paste · ctrl+j newline · esc cancel
 ```
 
+- **One screen.** The cursor starts in the prompt; the agent is one keystroke away.
+- **Numbered chips** for the agents you actually have installed. Every kind Herdr
+  supports is behind `ctrl+k`.
+- **New tab, or a split** beside the pane you came from — `ctrl+t` to choose.
+- **The prompt lands before the TUI paints.** Agents whose CLI takes a prompt as
+  an argument get it at launch instead of being typed into.
+- **Pasting works** — bracketed paste, unmarked bursts, and `ctrl+v` reading your
+  system clipboard.
+- **No dependencies, no build step.** Just Node.
+
 ## Install
 
 ```bash
-herdr plugin install <owner>/herdr-quick-prompt
+herdr plugin install Taanviir/herdr-quick-prompt
 ```
 
 Requires **Node 18 or newer** on `PATH` — that is the only dependency, and there
@@ -170,3 +180,7 @@ characters. `lib/text.js` owns that; nothing else should be measuring with
 
 The idea for this came from [NEBULA](https://github.com/agentSystemLabs/nebula)
 by WebDevCody.
+
+## License
+
+[MIT](LICENSE).
