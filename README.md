@@ -4,16 +4,7 @@ A [Herdr](https://herdr.dev) plugin. Press a key, pick a coding agent, type a
 prompt — Quick Prompt opens a new tab, starts that agent there, and hands it the
 prompt.
 
-```
-  1 claude   2 codex   3 cursor   4 opencode   5 pi           +17 ctrl+k
-
-› refactor the auth module to use the new token format
-
-
-───────────────────────────────────────────────────────────────────────
-→ new tab · ~/projects/budgit                                     ctrl+t
-⏎ launch · tab agent · ctrl+v paste · ctrl+j newline · esc cancel
-```
+![The Quick Prompt popup: numbered agent chips, a prompt, and the destination it will open in](docs/quick-prompt.png)
 
 - **One screen.** The cursor starts in the prompt; the agent is one keystroke away.
 - **Numbered chips** for the agents you actually have installed. Every kind Herdr
@@ -82,10 +73,19 @@ press `enter`.
 Editing keys work as you would expect: `ctrl+a`/`ctrl+e`, `ctrl+w`, `ctrl+u`,
 arrows, backspace, delete.
 
-The numbered chips are the agents you actually have installed, most recently
-used first, so `alt+1`–`alt+9` always mean something. Every kind Herdr supports
-is behind `ctrl+k`, where a filled dot marks the installed ones. Your last agent
-and destination are remembered.
+The numbered chips are the agents you actually have installed, so `alt+1`–`alt+9`
+always mean something. Their order is fixed on purpose — a number that points at
+a different agent depending on what you ran last is worse than no number at all —
+so recency only decides which chip starts selected, never where it sits.
+
+`ctrl+t` cycles where the agent lands:
+
+![The same popup with the destination set to split down](docs/quick-prompt-split.png)
+
+`ctrl+k` opens every kind Herdr supports, filterable by typing, with a filled dot
+against the ones installed here:
+
+![The full agent list, with installed agents marked](docs/quick-prompt-agents.png)
 
 Pasting works whether or not your terminal supports it. A paste arrives as a
 burst of keypresses where a newline would otherwise mean "launch" and a tab
@@ -175,6 +175,14 @@ Text handling works in grapheme clusters and terminal cells rather than UTF-16
 units, so CJK, emoji and combining accents wrap and delete as single visible
 characters. `lib/text.js` owns that; nothing else should be measuring with
 `.length`.
+
+The screenshots above are generated, not cropped: `tools/screenshot.py` runs the
+picker on a pty at the popup's real size and draws the captured output, so they
+cannot drift from what the code actually prints.
+
+```bash
+python3 tools/screenshot.py docs/quick-prompt.png --type "refactor the auth module"
+```
 
 ## Acknowledgements
 

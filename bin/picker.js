@@ -44,7 +44,7 @@ const workspace = process.env.QUICK_PROMPT_WORKSPACE ?? ctx.workspace_id ?? proc
 const originPane = process.env.QUICK_PROMPT_PANE ?? ctx.focused_pane_id ?? process.env.HERDR_PANE_ID;
 
 const prefs = readPrefs();
-const agents = catalog(prefs.recents);
+const agents = catalog();
 const out = process.stdout;
 
 // A paste is a burst of keypresses: inside it a newline is content, not "launch",
@@ -58,6 +58,7 @@ let burst = "";
 let swallow = false;
 
 const state = {
+  // Recency decides which chip starts selected; it never moves the chips.
   agent: Math.max(0, agents.findIndex((a) => a.kind === prefs.recents[0])),
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === prefs.destination)),
   prompt: new Editor(),
