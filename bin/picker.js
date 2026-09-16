@@ -17,6 +17,7 @@ const { STATE_DIR, readPrefs, remember, writeRequest } = require("../lib/state")
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
+const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
 
@@ -24,6 +25,7 @@ const DESTINATIONS = [
   { id: "tab", label: "new tab" },
   { id: "right", label: "split right" },
   { id: "down", label: "split down" },
+  { id: "workspace", label: "new workspace" },
 ];
 
 // Enough chips to be useful on a machine with nothing installed yet.
@@ -62,7 +64,8 @@ const state = {
   agent: Math.max(0, agents.findIndex((a) => a.kind === prefs.recents[0])),
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === prefs.destination)),
   prompt: new Editor(),
-  overlay: null, // { filter, index } while the full agent list is open
+  cwd, // where the agent will be started; ctrl+d changes it
+  overlay: null, // { type: "agents" | "dirs", ... } while a picker is open
   notice: null, // replaces the hint line until the next keypress
 };
 
@@ -100,7 +103,9 @@ function scheduleRender() {
 function render() {
   const inner = content();
   const rows = height();
-  const body = state.overlay ? overlayBody(inner, rows) : mainBody(inner, rows);
+  const body = state.overlay
+    ? (state.overlay.type === "dirs" ? dirsBody(inner, rows) : agentsBody(inner, rows))
+    : mainBody(inner, rows);
 
   const painted = [];
   for (let row = 0; row < rows; row += 1) {
@@ -173,14 +178,13 @@ function promptBlock(lines, top, rows, inner) {
 }
 
 // The popup's title bar has no room for the working directory, so it rides along
-// with the destination: what will happen, and where.
+// with the destination: what will happen and where, each next to the key that
+// changes it.
 function destinationRow(inner) {
-  const hint = style.dim("ctrl+t");
-  const room = inner - displayWidth(hint) - 4;
-  const where = shortenPath(cwd, Math.max(12, room - destination().label.length - 5));
-  const label = `${style.dim("→")} ${destination().label} ${style.dim(`· ${where}`)}`;
-  const gap = Math.max(1, inner - displayWidth(label) - displayWidth(hint));
-  return label + " ".repeat(gap) + hint;
+  const what = `${destination().label} ${style.dim("(ctrl+t)")}`;
+  const fixed = destination().label.length + 9 + 14; // label, hint, arrow and joins
+  const where = shortenPath(state.cwd, Math.max(12, inner - fixed));
+  return `${style.dim("→")} ${what} ${style.dim("·")} ${where} ${style.dim("(ctrl+d)")}`;
 }
 
 function hints() {
@@ -195,7 +199,7 @@ function overlayMatches() {
   return agents.filter((item) => item.kind.includes(needle));
 }
 
-function overlayBody(inner, rows) {
+function agentsBody(inner, rows) {
   const lines = new Array(rows).fill("");
   const list = overlayMatches();
 
@@ -224,6 +228,133 @@ function overlayBody(inner, rows) {
   return { lines, caret: null };
 }
 
+/* ---------- the working directory ---------- */
+
+function openDirectories() {
+  state.overlay = { type: "dirs", input: new Editor(), index: 0 };
+}
+
+// Empty: where you are, where you have been, and the neighbours of where you
+// are — usually the other project in the same folder. Typing filters that,
+// unless it looks like a path, in which case it completes one.
+function directoryEntries() {
+  const text = state.overlay.input.text.trim();
+  const known = () => suggestions(state.cwd, prefs.directories);
+
+  if (!text) return known();
+  if (text.startsWith("/") || text.startsWith("~")) return complete(text);
+
+  const needle = text.toLowerCase();
+  return known().filter((entry) => entry.toLowerCase().includes(needle));
+}
+
+function dirsBody(inner, rows) {
+  const lines = new Array(rows).fill("");
+  const { input } = state.overlay;
+  const entries = directoryEntries();
+
+  const here = shortenPath(state.cwd, Math.max(12, inner - 12));
+  const gap = Math.max(1, inner - "directory".length - displayWidth(here));
+  lines[0] = style.dim("directory") + " ".repeat(gap) + style.dim(here);
+
+  const { rows: wrapped, caret } = input.layout(inner - 2);
+  lines[1] = style.accent("› ") + style.bright(wrapped[0] ?? "");
+
+  const room = Math.max(1, rows - 3);
+  const active = Math.min(state.overlay.index, entries.length - 1);
+  const start = Math.max(0, Math.min(active - Math.floor(room / 2), entries.length - room));
+
+  entries.slice(start, start + room).forEach((entry, index) => {
+    const at = start + index;
+    const name = pad(truncate(shortenPath(entry, inner - 4), inner - 4), inner - 4);
+    lines[2 + index] = at === active ? style.selected(` ${name} `) : ` ${name} `;
+  });
+
+  if (entries.length === 0) lines[2] = style.dim("no matching directory");
+
+  lines[rows - 1] = state.overlay.error
+    ? style.warn(state.overlay.error)
+    : style.dim("↑↓ select · tab complete · ⏎ use · esc back");
+
+  return { lines, caret: { row: 1, col: 2 + Math.min(caret.col, inner - 3) } };
+}
+
+function chooseDirectory(value) {
+  const target = expand(value);
+  if (!isDirectory(target)) {
+    state.overlay.error = `not a directory: ${shortenPath(target, 48)}`;
+    return;
+  }
+  state.cwd = target;
+  state.overlay = null;
+}
+
+function onDirsKey(chunk, key) {
+  const overlay = state.overlay;
+  const { input } = overlay;
+  const entries = directoryEntries();
+  const highlighted = entries[Math.min(overlay.index, entries.length - 1)];
+  overlay.error = null;
+
+  const edited = () => {
+    overlay.index = 0;
+  };
+
+  switch (true) {
+    case key.name === "escape":
+      state.overlay = null;
+      break;
+    case key.name === "up" || (key.ctrl && key.name === "p"):
+      overlay.index = Math.max(0, Math.min(overlay.index, entries.length - 1) - 1);
+      break;
+    case key.name === "down" || (key.ctrl && key.name === "n"):
+      overlay.index = Math.min(entries.length - 1, overlay.index + 1);
+      break;
+    case key.name === "tab":
+      // Complete into the input so you can keep drilling down.
+      if (highlighted) {
+        overlay.input = new Editor(`${shortenPath(highlighted, 4096)}/`);
+        overlay.index = 0;
+      }
+      break;
+    case chunk === "\r" || key.name === "return":
+      // A path you typed wins; otherwise take what is highlighted.
+      if (isDirectory(expand(input.text))) chooseDirectory(input.text);
+      else if (highlighted) chooseDirectory(highlighted);
+      else chooseDirectory(input.text);
+      break;
+    case key.ctrl && key.name === "u":
+      input.clear();
+      edited();
+      break;
+    case key.ctrl && key.name === "w":
+      input.deleteWord();
+      edited();
+      break;
+    case key.name === "backspace":
+      input.backspace();
+      edited();
+      break;
+    case key.name === "delete":
+      input.deleteForward();
+      edited();
+      break;
+    case key.name === "left":
+      input.move(-1);
+      break;
+    case key.name === "right":
+      input.move(1);
+      break;
+    case isPrintable(chunk, key):
+      input.insert(chunk);
+      edited();
+      break;
+    default:
+      return;
+  }
+  scheduleRender();
+}
+
 /* ---------- input ---------- */
 
 function onKey(chunk, key = {}) {
@@ -250,7 +381,9 @@ function onKey(chunk, key = {}) {
     pasteFromClipboard();
     return scheduleRender();
   }
-  if (state.overlay) return onOverlayKey(chunk, key);
+  if (state.overlay) {
+    return state.overlay.type === "dirs" ? onDirsKey(chunk, key) : onAgentsKey(chunk, key);
+  }
   return onMainKey(chunk, key);
 }
 
@@ -297,7 +430,12 @@ function insertPasted(text) {
   const clean = sanitizePasted(text);
   if (!clean) return;
   if (state.overlay) {
-    state.overlay.filter += clean.replace(/\n/g, "").toLowerCase();
+    const flat = clean.replace(/\n/g, "");
+    if (state.overlay.type === "dirs") {
+      state.overlay.input.insert(flat);
+    } else {
+      state.overlay.filter += flat.toLowerCase();
+    }
     state.overlay.index = 0;
     return;
   }
@@ -331,7 +469,10 @@ function onMainKey(chunk, key) {
       cycleAgent(1);
       break;
     case key.ctrl && key.name === "k":
-      state.overlay = { filter: "", index: state.agent };
+      state.overlay = { type: "agents", filter: "", index: state.agent };
+      break;
+    case key.ctrl && key.name === "d":
+      openDirectories();
       break;
     case key.ctrl && key.name === "t":
       state.destination = (state.destination + 1) % DESTINATIONS.length;
@@ -372,7 +513,7 @@ function onMainKey(chunk, key) {
   scheduleRender();
 }
 
-function onOverlayKey(chunk, key) {
+function onAgentsKey(chunk, key) {
   const list = overlayMatches();
 
   switch (true) {
@@ -421,12 +562,12 @@ function launch() {
   const chosen = agent();
   if (!chosen) return quit(0);
 
-  remember(chosen.kind, destination().id);
+  remember(chosen.kind, destination().id, state.cwd);
   const request = writeRequest({
     kind: chosen.kind,
     prompt: state.prompt.text.trim(),
     destination: destination().id,
-    cwd,
+    cwd: state.cwd,
     workspace,
     pane: originPane,
   });

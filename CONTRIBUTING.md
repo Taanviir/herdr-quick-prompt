@@ -38,6 +38,7 @@ testing the published copy.
 | `lib/text.js` | Terminal-cell width and paste sanitising |
 | `lib/ui.js` | Colours, padding, truncation, path shortening |
 | `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
+| `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/state.js` | Preferences and launch requests under `HERDR_PLUGIN_STATE_DIR` |
 
 ## Things that will bite you
@@ -99,6 +100,7 @@ what the code prints:
 ```bash
 python3 tools/screenshot.py docs/quick-prompt.png --type "refactor the auth module"
 python3 tools/screenshot.py docs/quick-prompt-agents.png --keys '\x0b'
+python3 tools/screenshot.py docs/quick-prompt-directory.png --keys '\x04'
 ```
 
 It runs the picker on a pty at the popup's real size and draws the captured

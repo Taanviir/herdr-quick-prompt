@@ -31,12 +31,6 @@ function readRequest(file) {
   return request;
 }
 
-function tabLabel({ kind, prompt }) {
-  const firstLine = prompt.split("\n")[0].trim();
-  if (!firstLine) return kind;
-  return firstLine.length > 24 ? `${firstLine.slice(0, 23)}…` : firstLine;
-}
-
 // Names must match [a-z][a-z0-9_-]{0,31} and be unique among live agents.
 function uniqueName(kind) {
   const taken = new Set();
@@ -54,14 +48,28 @@ function uniqueName(kind) {
   return `${base}-${Date.now().toString(36).slice(-4)}`;
 }
 
-function createTab({ workspace, cwd, label }) {
-  const args = ["tab", "create", "--label", label, "--focus"];
+// Deliberately unlabelled. A label taken from the prompt is a snapshot of the
+// first second and wrong by the second minute; agents publish their own live
+// titles, and Herdr shows those.
+function createTab({ workspace, cwd }) {
+  const args = ["tab", "create", "--focus"];
   if (workspace) args.push("--workspace", workspace);
   if (cwd) args.push("--cwd", cwd);
 
   const { result } = run(args);
   const pane = result.root_pane?.pane_id;
   if (!pane) throw new HerdrError("herdr did not return a pane for the new tab");
+  return pane;
+}
+
+// Herdr labels a workspace from its directory, which is what you want here.
+function createWorkspace({ cwd }) {
+  const args = ["workspace", "create", "--focus"];
+  if (cwd) args.push("--cwd", cwd);
+
+  const { result } = run(args);
+  const pane = result.root_pane?.pane_id;
+  if (!pane) throw new HerdrError("herdr did not return a pane for the new workspace");
   return pane;
 }
 
@@ -77,12 +85,16 @@ function createSplit({ pane, cwd, direction }) {
   return created;
 }
 
-// Where the agent lands: its own tab, or a split beside the caller.
+// Where the agent lands: its own tab, a split beside the caller, or a whole new
+// workspace.
 function createTarget(request) {
   if (request.destination === "right" || request.destination === "down") {
     return createSplit({ pane: request.pane, cwd: request.cwd, direction: request.destination });
   }
-  return createTab({ workspace: request.workspace, cwd: request.cwd, label: tabLabel(request) });
+  if (request.destination === "workspace") {
+    return createWorkspace({ cwd: request.cwd });
+  }
+  return createTab({ workspace: request.workspace, cwd: request.cwd });
 }
 
 // A freshly created tab may not be at its interactive prompt yet, and

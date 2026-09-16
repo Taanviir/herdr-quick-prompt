@@ -9,7 +9,8 @@ prompt.
 - **One screen.** The cursor starts in the prompt; the agent is one keystroke away.
 - **Numbered chips** for the agents you actually have installed. Every kind Herdr
   supports is behind `ctrl+k`.
-- **New tab, or a split** beside the pane you came from — `ctrl+t` to choose.
+- **New tab, a split, or a whole new workspace** — `ctrl+t` to choose, and
+  `ctrl+d` to start it somewhere other than where you are.
 - **The prompt lands before the TUI paints.** Agents whose CLI takes a prompt as
   an argument get it at launch instead of being typed into.
 - **Pasting works** — bracketed paste, unmarked bursts, and `ctrl+v` reading your
@@ -67,7 +68,8 @@ press `enter`.
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1`…`alt+9` | jump straight to a numbered agent |
 | `ctrl+k` | the full agent list, filterable by typing |
-| `ctrl+t` | destination: new tab → split right → split down |
+| `ctrl+t` | destination: new tab → split right → split down → new workspace |
+| `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
 | `esc` | cancel |
 
 Editing keys work as you would expect: `ctrl+a`/`ctrl+e`, `ctrl+w`, `ctrl+u`,
@@ -78,9 +80,20 @@ always mean something. Their order is fixed on purpose — a number that points 
 a different agent depending on what you ran last is worse than no number at all —
 so recency only decides which chip starts selected, never where it sits.
 
-`ctrl+t` cycles where the agent lands:
+`ctrl+t` cycles where the agent lands — a new tab, a split beside the pane you
+came from, or a new workspace of its own:
 
 ![The same popup with the destination set to split down](docs/quick-prompt-split.png)
+
+`ctrl+d` changes where it starts. With nothing typed it offers the directory you
+are in, the ones you have launched into before, and the projects sitting next to
+this one; type to filter those, or type a path (starting with `/` or `~`) to
+complete one:
+
+![The directory picker, listing neighbouring projects](docs/quick-prompt-directory.png)
+
+A new workspace takes its name from that directory, the way Herdr names one you
+open by hand.
 
 `ctrl+k` opens every kind Herdr supports, filterable by typing, with a filled dot
 against the ones installed here:
@@ -95,9 +108,10 @@ it does not. `ctrl+v` is not a terminal paste at all — the byte reaches the
 application — so the picker reads your clipboard itself through `wl-paste`,
 `xclip`, `xsel`, `pbpaste`, or PowerShell on WSL and Windows.
 
-A new tab is labelled with the first line of your prompt, the agent opens in the
-directory of the pane you invoked from, and it is named `qp-<kind>` so you can
-keep driving it from scripts:
+New tabs are left unlabelled, so they get Herdr's ordinary numbering and the
+agent's own live title does the describing — a label frozen from your opening
+prompt stops being true the moment the work moves on. The agent itself is named
+`qp-<kind>`, so you can keep driving it from scripts:
 
 ```bash
 herdr agent read qp-codex --source recent-unwrapped --lines 120
