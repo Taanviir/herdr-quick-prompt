@@ -616,6 +616,7 @@ function launch() {
 
   remember(chosen.kind, destination().id, state.cwd);
   const request = writeRequest({
+    submittedAt: Date.now(),
     kind: chosen.kind,
     prompt: state.prompt.text.trim(),
     destination: destination().id,
