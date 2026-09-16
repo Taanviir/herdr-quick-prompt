@@ -58,6 +58,8 @@ const ESC = 0x1b;
 const paste = { active: false, text: "" };
 let burst = "";
 let swallow = false;
+// Escapes already acted on, waiting for readline to emit them late.
+let pendingEscapes = 0;
 
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
@@ -375,6 +377,11 @@ function onKey(chunk, key = {}) {
   }
   // Keypresses belonging to a burst this already handled as pasted text.
   if (swallow) return;
+  // The late half of an escape already acted on above.
+  if (key.name === "escape" && pendingEscapes > 0) {
+    pendingEscapes -= 1;
+    return;
+  }
 
   if (key.ctrl && key.name === "c") return quit(0);
   if (key.ctrl && key.name === "v") {
@@ -391,6 +398,17 @@ function onKey(chunk, key = {}) {
 // the terminal did not mark as a paste.
 function onData(chunk) {
   if (paste.active || swallow) return;
+
+  // A lone ESC byte in its own read is the Escape key. Terminals send real
+  // escape sequences in a single write, so there is nothing more coming — but
+  // readline cannot know that and waits 500ms before giving up on a sequence,
+  // which is a very long time to watch a modal sit there after you cancelled it.
+  if (chunk.length === 1 && chunk[0] === ESC) {
+    pendingEscapes += 1;
+    onEscape();
+    return;
+  }
+
   if (chunk[0] === ESC) return; // an escape sequence, however long, is not a paste
   if (chunk.length <= BURST_BYTES) return;
 
@@ -424,6 +442,14 @@ function pasteFromClipboard() {
     return;
   }
   insertPasted(text);
+}
+
+function onEscape() {
+  if (state.overlay) {
+    state.overlay = null;
+    return scheduleRender();
+  }
+  quit(0);
 }
 
 function insertPasted(text) {

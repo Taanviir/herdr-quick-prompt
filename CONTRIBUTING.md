@@ -56,6 +56,12 @@ directory the user invoked from travels as `QUICK_PROMPT_CWD` instead.
 `herdr plugin log list`, so a crash is just a window that blinks once. Uncaught
 errors are appended to `crash.log` in the state directory — check there first.
 
+**A lone ESC byte is the Escape key.** Readline cannot tell `esc` from the start
+of an arrow key, so it waits 500ms before deciding — which is a very long time to
+watch a modal you just cancelled. Terminals send real escape sequences in one
+write, so a one-byte read containing `\x1b` is acted on immediately, and the
+keypress readline emits half a second later is dropped.
+
 **Herdr owns the popup's frame and size.** It draws the border and title, and
 hands the process fewer rows and columns than the manifest declares — three
 columns and two rows go to the frame. Cells the picker never writes show the
