@@ -57,9 +57,9 @@ directory the user invoked from travels as `QUICK_PROMPT_CWD` instead.
 errors are appended to `crash.log` in the state directory — check there first.
 
 **Herdr owns the popup's frame and size.** It draws the border and title, and
-hands the process fewer rows and columns than the manifest declares (76×14
-becomes 73×12 here). Cells the picker never writes show the panes behind it, so
-every row is padded to the full width.
+hands the process fewer rows and columns than the manifest declares — three
+columns and two rows go to the frame. Cells the picker never writes show the
+panes behind it, so every row is padded to the full width.
 
 ## Testing
 
@@ -101,11 +101,18 @@ what the code prints:
 python3 tools/screenshot.py docs/quick-prompt.png --type "refactor the auth module"
 python3 tools/screenshot.py docs/quick-prompt-agents.png --keys '\x0b'
 python3 tools/screenshot.py docs/quick-prompt-directory.png --keys '\x04'
+python3 tools/screenshot.py docs/quick-prompt-split.png --recent codex \
+    --type "add a migration for the invoices table" --keys '\x14\x14'
 ```
 
 It runs the picker on a pty at the popup's real size and draws the captured
 output with Herdr's default palette. Needs Pillow and DejaVu Sans Mono;
 nothing at runtime does.
+
+The directory picker lists real directories, so the run gets a fixture `HOME`
+(`PROJECTS` in the script) rather than yours — otherwise the images would
+change with whoever regenerated them. Resizing the popup means changing `ROWS`
+to match and regenerating all four.
 
 ## Style
 

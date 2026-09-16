@@ -28,7 +28,24 @@ FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FONT_SIZE = 17
 PAD = 14          # inside the frame
 MARGIN = 18       # around the frame
-COLS, ROWS = 73, 10
+COLS, ROWS = 73, 16
+
+# The directory picker lists what is really on disk, so without a fixture the
+# images would differ from machine to machine and show whatever the author keeps
+# in ~/projects. The picker runs against this tree instead.
+PROJECTS = [
+    "42",
+    "anilist-api",
+    "budgit",
+    "family-tree-generator",
+    "fanar",
+    "gmail-dashboard",
+    "herdr-quick-prompt",
+    "notes",
+    "sandbox",
+    "website",
+]
+CWD = "budgit"
 
 # Catppuccin Mocha, which is Herdr's default theme.
 BASE = "#1e1e2e"
@@ -46,11 +63,13 @@ CONTROL = re.compile(r"[\r\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 CURSOR_AT = re.compile(r"\x1b\[(\d+);(\d+)H")
 
 
-def capture(keys, state_dir):
+def capture(keys, state_dir, home):
     """Run the picker, send `keys`, return (final screen text, cursor row/col)."""
     pid, fd = pty.fork()
     if pid == 0:
-        os.environ["QUICK_PROMPT_CWD"] = os.path.expanduser("~/projects/budgit")
+        # HOME is what the picker shortens paths against and completes from.
+        os.environ["HOME"] = home
+        os.environ["QUICK_PROMPT_CWD"] = os.path.join(home, "projects", CWD)
         os.environ["HERDR_PLUGIN_STATE_DIR"] = state_dir
         os.execvp("node", ["node", "bin/picker.js"])
 
@@ -155,6 +174,11 @@ def main():
     parser.add_argument("--recent", default="claude", help="agent to start selected")
     args = parser.parse_args()
 
+    home = "/tmp/qp-screenshot-home"
+    shutil.rmtree(home, ignore_errors=True)
+    for name in PROJECTS:
+        os.makedirs(os.path.join(home, "projects", name))
+
     state = "/tmp/qp-screenshot-state"
     shutil.rmtree(state, ignore_errors=True)
     os.makedirs(state)
@@ -167,9 +191,10 @@ def main():
     if args.keys:
         keys.append(args.keys.encode().decode("unicode_escape").encode())
 
-    screen, cursor = capture(keys, state)
+    screen, cursor = capture(keys, state, home)
     render(screen, cursor, args.output)
     shutil.rmtree(state, ignore_errors=True)
+    shutil.rmtree(home, ignore_errors=True)
 
 
 if __name__ == "__main__":

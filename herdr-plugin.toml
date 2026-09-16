@@ -22,5 +22,5 @@ id = "picker"
 title = "Quick Prompt"
 placement = "popup"
 width = 76
-height = 12
+height = 18
 command = ["node", "bin/picker.js"]
