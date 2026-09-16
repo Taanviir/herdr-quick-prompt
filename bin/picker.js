@@ -13,7 +13,7 @@ const fs = require("node:fs");
 const { catalog } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, writeRequest } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, writeRequest, readFailedRequest, discardRequest } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
@@ -47,6 +47,7 @@ const originPane = process.env.QUICK_PROMPT_PANE ?? ctx.focused_pane_id ?? proce
 
 const prefs = readPrefs();
 const agents = catalog();
+const recovered = readFailedRequest();
 const out = process.stdout;
 
 // A paste is a burst of keypresses: inside it a newline is content, not "launch",
@@ -63,12 +64,12 @@ let pendingEscapes = 0;
 
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
-  agent: Math.max(0, agents.findIndex((a) => a.kind === prefs.recents[0])),
-  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === prefs.destination)),
-  prompt: new Editor(),
-  cwd, // where the agent will be started; ctrl+d changes it
+  agent: Math.max(0, agents.findIndex((a) => a.kind === (recovered?.request.kind ?? prefs.recents[0]))),
+  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (recovered?.request.destination ?? prefs.destination))),
+  prompt: new Editor(recovered?.request.prompt ?? ""),
+  cwd: recovered?.request.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   overlay: null, // { type: "agents" | "dirs", ... } while a picker is open
-  notice: null, // replaces the hint line until the next keypress
+  notice: recovered ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear" : null,
 };
 
 // Every cell inside the popup has to be written: cells this never paints show
@@ -624,6 +625,7 @@ function launch() {
   });
 
   spawnDetached(process.execPath, [LAUNCHER, request]);
+  if (recovered) discardRequest(recovered.file);
   quit(0);
 }
 

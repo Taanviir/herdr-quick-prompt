@@ -4,6 +4,7 @@
 // Runs after the popup has closed so the modal never blocks on agent startup.
 
 const fs = require("node:fs");
+const { finishRequest } = require("../lib/state");
 const { run, notify, HerdrError } = require("../lib/herdr");
 const { supportsInlinePrompt } = require("../lib/agents");
 
@@ -23,11 +24,6 @@ function sleep(ms) {
 
 function readRequest(file) {
   const request = JSON.parse(fs.readFileSync(file, "utf8"));
-  try {
-    fs.unlinkSync(file);
-  } catch {
-    // A stale request file is harmless.
-  }
   return request;
 }
 
@@ -147,7 +143,7 @@ function main() {
   if (!started.started) throw new HerdrError(started.message);
 
   // Delivered at launch: nothing left to type.
-  if (delivered || !prompt) return;
+  if (delivered || !prompt) return true;
 
   if (!started.ready) {
     // Blocked on a trust or login dialog; wait for the user to clear it.
@@ -155,19 +151,21 @@ function main() {
       check: false,
     });
     if (waited.ok === false) {
-      notify("Quick Prompt", `${kind} needs attention before it can take the prompt.`);
-      return;
+      notify("Quick Prompt", `${kind} needs attention. Reopen Quick Prompt to recover your draft.`);
+      return false;
     }
   }
 
   if (!waitInteractive(name)) {
-    notify("Quick Prompt", `${kind} never became ready for input.`);
-    return;
+    notify("Quick Prompt", `${kind} never became ready. Reopen Quick Prompt to recover your draft.`);
+    return false;
   }
 
   if (!deliverPrompt(name, prompt)) {
-    notify("Quick Prompt", `${kind} started but did not accept the prompt.`);
+    notify("Quick Prompt", `${kind} did not accept the prompt. Reopen Quick Prompt to recover your draft.`);
+    return false;
   }
+  return true;
 }
 
 function agentState(name) {
@@ -214,8 +212,10 @@ function promptLanded(name, prompt) {
 }
 
 try {
-  main();
+  const success = main();
+  finishRequest(process.argv[2], success);
 } catch (error) {
-  notify("Quick Prompt failed", error.message ?? String(error));
+  finishRequest(process.argv[2], false);
+  notify("Quick Prompt failed", `${error.message ?? String(error)} — reopen Quick Prompt to recover your draft.`);
   process.exit(1);
 }
