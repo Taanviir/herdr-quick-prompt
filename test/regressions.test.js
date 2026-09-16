@@ -37,7 +37,7 @@ test("structured readiness errors preserve their code and do not restart an agen
   let calls = 0;
   const launcher = load("bin/launch.js", {
     "../lib/herdr": { run: () => { calls++; return result; } },
-  }, "try {\n  main();");
+  }, "try {\n  const success = main();");
   const started = launcher.evaluate('startAgent("qp-test", "test", "pane", null)');
   assert.equal(started.started, true);
   assert.equal(started.ready, false);
@@ -108,6 +108,72 @@ test("vertical navigation keeps a preferred column through short and wrapped lin
   const ui = picker();
   ui.evaluate("state.prompt = new Editor('one\\ntwo'); onMainKey('', {name: 'up'})");
   assert.equal(ui.evaluate("state.prompt.cursor"), 3);
+});
+
+test("failed requests survive reopening and successful requests are removed", (t) => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-recovery-test-"));
+  t.after(() => {
+    for (const name of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, name));
+    fs.rmdirSync(dir);
+  });
+  const state = load("lib/state.js", {}, "const STATE_DIR =");
+  state.context.process.env.HERDR_PLUGIN_STATE_DIR = dir;
+  state.context.process.pid = process.pid;
+  const source = fs.readFileSync(path.resolve(__dirname, "../lib/state.js"), "utf8");
+  vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
+  const api = state.context.module.exports;
+  const request = { kind: "gemini", prompt: "recover this", cwd: "/tmp/", destination: "down" };
+  const file = api.writeRequest(request);
+  assert.equal(api.readFailedRequest(), null, "in-flight launches must not be restored");
+  api.finishRequest(file, false);
+  const saved = api.readFailedRequest();
+  assert.equal(saved.request.prompt, request.prompt);
+  const ui = picker(saved);
+  assert.equal(ui.evaluate("state.prompt.text"), request.prompt);
+  assert.equal(ui.evaluate("agent().kind"), request.kind);
+  assert.equal(ui.evaluate("destination().id"), request.destination);
+  assert.equal(ui.evaluate("state.cwd"), request.cwd);
+  assert.match(ui.evaluate("state.notice"), /Recovered/);
+  assert.ok(api.readFailedRequest(), "opening must not consume the draft");
+  api.discardRequest(saved.file);
+  const success = api.writeRequest(request);
+  api.finishRequest(success, true);
+  assert.equal(fs.existsSync(success), false);
+  assert.equal(api.readFailedRequest(), null);
+});
+
+test("launcher finalizes recovery correctly on success, startup failure, and delivery failure", () => {
+  for (const scenario of ["success", "target-failure", "start-failure", "wait-failure", "delivery-failure"]) {
+    const finished = [];
+    const notifications = [];
+    const launcher = load("bin/launch.js", {
+      "node:fs": { readFileSync: () => JSON.stringify({ kind: "test", prompt: "keep me" }) },
+      "../lib/state": { finishRequest: (file, success) => finished.push({ file, success }) },
+      "../lib/agents": { supportsInlinePrompt: () => scenario === "success" },
+      "../lib/herdr": {
+        HerdrError: Error,
+        notify: (...args) => notifications.push(args),
+        run: (args) => {
+          if (args[0] === "tab") {
+            if (scenario === "target-failure") throw new Error("Could not create tab");
+            return { ok: true, result: { root_pane: { pane_id: "test-pane" } } };
+          }
+          if (args[1] === "start" && scenario === "start-failure") return { ok: false, message: "permission denied" };
+          if (args[1] === "start" && scenario === "wait-failure") return { ok: false, code: "agent_not_ready", message: "Needs attention" };
+          if (args[1] === "wait") return { ok: false, message: "timeout" };
+          return { ok: true, result: {} };
+        },
+      },
+    }, "try {\n  const success = main();");
+    launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+    launcher.context.process.exit = () => {};
+    launcher.evaluate("waitInteractive = () => true; deliverPrompt = () => false");
+    const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
+    launcher.evaluate(source.slice(source.indexOf("try {\n  const success = main();")));
+    assert.equal(finished.length, 1, scenario);
+    assert.equal(finished[0].success, scenario === "success", scenario);
+    if (scenario !== "success") assert.match(notifications.at(-1)[1], /recover your draft/, scenario);
+  }
 });
 
 test("directory arrows override typed parent, while direct Enter uses the typed path", () => {

@@ -78,6 +78,12 @@ arrows, backspace, delete.
 Up/down moves between displayed prompt lines, including wrapped lines. Long
 directory paths scroll horizontally to keep the cursor visible.
 
+If a launch fails, reopen Quick Prompt to recover the prompt, agent, directory,
+and destination. Edit it and press Enter to retry, or use `ctrl+u` to clear the
+text. Retrying uses the workspace and pane you open the picker from. Failed
+drafts stay in the plugin state directory until replaced by a retry; successful
+launch requests are removed.
+
 The numbered chips are the agents you actually have installed, so `alt+1`–`alt+9`
 always mean something. Their order is fixed on purpose — a number that points at
 a different agent depending on what you ran last is worse than no number at all —
