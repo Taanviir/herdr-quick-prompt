@@ -18,10 +18,12 @@ const cwd = ctx.focused_pane_cwd ?? ctx.workspace_cwd ?? process.env.HOME;
 const workspace = ctx.workspace_id ?? process.env.HERDR_WORKSPACE_ID;
 const pane = ctx.focused_pane_id ?? process.env.HERDR_PANE_ID;
 
-// A popup always targets the active pane, so it rejects --workspace; the picker
-// gets the caller's location through the environment instead.
+// A popup always targets the active pane, so it rejects --workspace, and the
+// picker's location travels as environment rather than as --cwd: the manifest
+// launches it by a path relative to the plugin root, so moving its working
+// directory to the user's project would leave node unable to find the script.
 const args = ["plugin", "pane", "open", "--plugin", "taanviir.quick-prompt", "--entrypoint", "picker"];
-if (cwd) args.push("--cwd", cwd, "--env", `QUICK_PROMPT_CWD=${cwd}`);
+if (cwd) args.push("--env", `QUICK_PROMPT_CWD=${cwd}`);
 if (workspace) args.push("--env", `QUICK_PROMPT_WORKSPACE=${workspace}`);
 // A popup has no pane of its own, so the split destinations need to be told
 // which pane the user was sitting in.

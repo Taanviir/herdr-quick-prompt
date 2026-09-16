@@ -5,16 +5,14 @@ prompt — Quick Prompt opens a new tab, starts that agent there, and delivers t
 prompt for you.
 
 ```
-┌─ Quick Prompt ──────────────────────── ~/projects/budgit ─┐
-│                                                           │
-│   1 claude   2 codex   3 cursor   4 gemini    +18 ctrl+k  │
-│                                                           │
-│  › refactor the auth module to use the new token format   │
-│                                                           │
-│  → new tab                                        ctrl+t  │
-│                                                           │
-│  ⏎ launch · tab agent · ctrl+j newline · esc cancel       │
-└───────────────────────────────────────────────────────────┘
+  1 claude   2 codex   3 cursor   4 opencode   5 pi   6 agy   +16 ctrl+k
+
+› refactor the auth module to use the new token format
+
+
+→ new tab in ~/projects/budgit                                 ctrl+t
+
+⏎ launch · tab agent · ctrl+j newline · esc cancel
 ```
 
 ## Install
@@ -118,6 +116,26 @@ when an agent misbehaves with a launch argument.
 The agent list is read from `herdr agent start --help` at runtime, so new agent
 kinds appear as soon as Herdr supports them. Your recent agents and last
 destination live in `HERDR_PLUGIN_STATE_DIR`.
+
+The picker renders inside the popup Herdr already draws, so it has no border or
+title of its own, and it never moves its own working directory: the manifest
+launches it by a path relative to the plugin root, and the directory you invoked
+from travels as `QUICK_PROMPT_CWD` instead.
+
+## Troubleshooting
+
+**The popup flashes and closes.** Something made the picker exit. Popup output
+does not appear in `herdr plugin log list`, so the picker writes uncaught errors
+to `crash.log` in its state directory:
+
+```bash
+cat "$(herdr plugin config-dir taanviir.quick-prompt | sed 's|/config/|/plugins/|')/crash.log"
+# or, on Linux: ~/.local/state/herdr/plugins/taanviir.quick-prompt/crash.log
+```
+
+A crash that happens before the picker starts — a missing Node, a broken
+install — leaves nothing there. Check `node --version` and
+`herdr plugin list` in that case.
 
 ## Development
 

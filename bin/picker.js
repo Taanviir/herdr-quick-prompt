@@ -6,12 +6,13 @@
 
 const readline = require("node:readline");
 const path = require("node:path");
+const fs = require("node:fs");
 
 const { catalog } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
-const { spawnDetached } = require("../lib/herdr");
-const { readPrefs, remember, writeRequest } = require("../lib/state");
-const { style, pad, shortenPath, displayWidth, frame, frameContent } = require("../lib/ui");
+const { spawnDetached, notify } = require("../lib/herdr");
+const { STATE_DIR, readPrefs, remember, writeRequest } = require("../lib/state");
+const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
 
@@ -46,47 +47,46 @@ const state = {
   overlay: null, // { filter, index } while the full agent list is open
 };
 
+// Herdr's popup draws its own border and title, so this renders inside it. Lines
+// stop one cell short of the last column: writing into the final cell leaves the
+// terminal in a pending-wrap state that pushes the rest onto the next row.
+const GUTTER = 1;
 const width = () => Math.max(32, out.columns ?? 64);
-const height = () => Math.max(12, out.rows ?? 18);
+const height = () => Math.max(8, out.rows ?? 12);
+const content = () => Math.max(20, width() - GUTTER * 2);
 const agent = () => agents[state.agent];
 const destination = () => DESTINATIONS[state.destination];
 
 /* ---------- rendering ---------- */
 
 function render() {
-  const bodyHeight = height() - 2;
-  const content = frameContent(width());
-  const body = state.overlay ? overlayBody(content, bodyHeight) : mainBody(content, bodyHeight);
+  const inner = content();
+  const rows = height();
+  const body = state.overlay ? overlayBody(inner, rows) : mainBody(inner, rows);
 
-  const painted = frame({
-    width: width(),
-    height: height(),
-    title: "Quick Prompt",
-    right: shortenPath(cwd, Math.max(10, content - 20)),
-    body: body.lines,
-  });
+  const painted = body.lines
+    .slice(0, rows)
+    .map((line) => " ".repeat(GUTTER) + truncate(line, inner));
 
-  out.write(`\x1b[2J\x1b[H${painted.lines.join("\r\n")}`);
+  out.write(`\x1b[2J\x1b[H${painted.join("\r\n")}`);
 
   if (body.caret) {
-    const row = painted.originRow + body.caret.row + 1;
-    const col = painted.originCol + body.caret.col + 1;
-    out.write(`\x1b[${row};${col}H\x1b[?25h`);
+    out.write(`\x1b[${body.caret.row + 1};${GUTTER + body.caret.col + 1}H\x1b[?25h`);
   } else {
     out.write("\x1b[?25l");
   }
 }
 
-function mainBody(content, bodyHeight) {
-  const lines = new Array(bodyHeight).fill("");
-  lines[1] = chipRow(content);
+function mainBody(content, rows) {
+  const lines = new Array(rows).fill("");
+  lines[0] = chipRow(content);
 
-  const promptTop = 3;
-  const promptRows = Math.max(1, bodyHeight - 7);
+  const promptTop = 2;
+  const promptRows = Math.max(1, rows - 6);
   const caret = promptBlock(lines, promptTop, promptRows, content);
 
-  lines[bodyHeight - 3] = destinationRow(content);
-  lines[bodyHeight - 1] = style.dim(hints());
+  lines[rows - 3] = destinationRow(content);
+  lines[rows - 1] = style.dim(hints());
   return { lines, caret };
 }
 
@@ -147,9 +147,13 @@ function promptBlock(lines, top, rows, content) {
   return { row: top + (caret.row - from), col: 2 + caret.col };
 }
 
+// The popup's title bar has no room for the working directory, so it rides along
+// with the destination: what will happen, and where.
 function destinationRow(content) {
-  const label = style.dim(`→ ${destination().label}`);
   const hint = style.dim("ctrl+t");
+  const room = content - displayWidth(hint) - 4;
+  const where = shortenPath(cwd, Math.max(12, room - destination().label.length - 5));
+  const label = style.dim(`→ ${destination().label} in ${where}`);
   const gap = Math.max(1, content - displayWidth(label) - displayWidth(hint));
   return label + " ".repeat(gap) + hint;
 }
@@ -175,12 +179,14 @@ function overlayBody(content, bodyHeight) {
     : style.dim("agent");
 
   if (list.length === 0) {
-    lines[2] = style.warn("no agent kind matches that filter");
+    lines[1] = style.warn("no agent kind matches that filter");
     lines[bodyHeight - 1] = style.dim("esc back");
     return { lines, caret: null };
   }
 
-  const room = bodyHeight - 4;
+  // The list needs every row it can get, so it runs from just under the filter
+  // down to the hint line.
+  const room = bodyHeight - 2;
   const active = Math.min(state.overlay.index, list.length - 1);
   const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
 
@@ -188,7 +194,7 @@ function overlayBody(content, bodyHeight) {
     const at = start + index;
     const mark = item.installed ? style.ok("●") : style.dim("○");
     const name = pad(item.kind, Math.max(10, content - 6));
-    lines[2 + index] = at === active ? `${style.selected(` ${name}`)} ${mark}` : ` ${name} ${mark}`;
+    lines[1 + index] = at === active ? `${style.selected(` ${name}`)} ${mark}` : ` ${name} ${mark}`;
   });
 
   lines[bodyHeight - 1] = style.dim("↑↓ select · type to filter · ⏎ choose · esc back");
@@ -333,6 +339,23 @@ function quit(code) {
 }
 
 /* ---------- boot ---------- */
+
+// A popup that dies takes its output with it: pane commands are not in
+// `herdr plugin log list`, so a crash would otherwise be a window that blinks
+// once and vanishes. Leave a trail.
+function reportCrash(error) {
+  const detail = error?.stack ?? String(error);
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.appendFileSync(path.join(STATE_DIR, "crash.log"), `${new Date().toISOString()}\n${detail}\n\n`);
+  } catch {
+    // Nothing more we can do from in here.
+  }
+  notify("Quick Prompt crashed", `${String(error).slice(0, 160)} — see crash.log in ${STATE_DIR}`);
+  process.exit(1);
+}
+
+process.on("uncaughtException", reportCrash);
 
 if (!process.stdin.isTTY) {
   process.stderr.write("quick-prompt: picker needs an interactive terminal\n");
