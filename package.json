@@ -5,6 +5,9 @@
   "type": "commonjs",
   "description": "Herdr plugin: pick a coding agent, type a prompt, launch it in a new tab",
   "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  },
   "engines": {
     "node": ">=18"
   }

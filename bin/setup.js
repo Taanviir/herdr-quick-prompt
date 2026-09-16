@@ -41,7 +41,8 @@ if (config.includes(ACTION)) {
 }
 
 // Don't quietly shadow a key the user already uses for something else.
-const existing = new RegExp(`^\\s*key\\s*=\\s*"${key.replace(/[+]/g, "\\+")}"`, "m");
+const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const existing = new RegExp(`^\\s*key\\s*=\\s*(["'])${escapedKey}\\1`, "m");
 if (existing.test(config)) {
   report(`${key} is already bound in ${file}. Set QUICK_PROMPT_KEY to another key and retry.`, {
     failed: true,
