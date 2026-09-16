@@ -157,6 +157,13 @@ from travels as `QUICK_PROMPT_CWD` instead.
 
 ## Troubleshooting
 
+Launch timings are recorded in `startup.jsonl` under `HERDR_PLUGIN_STATE_DIR`
+(on Linux, normally `~/.local/state/herdr/plugins/taanviir.quick-prompt/`).
+Each record includes dispatch time, individual Herdr calls, retry sleeps, and
+total worker time. Prompt text and command arguments are not logged. The log
+rotates after 256 KiB, retaining one previous file. `agent start` includes Herdr's
+readiness detection, so its duration is not an exact measurement of first paint.
+
 **The popup flashes and closes.** Something made the picker exit. Popup output
 does not appear in `herdr plugin log list`, so the picker writes uncaught errors
 to `crash.log` in its state directory:

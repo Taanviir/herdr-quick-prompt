@@ -5,7 +5,8 @@
 
 const fs = require("node:fs");
 const { finishRequest } = require("../lib/state");
-const { run, notify, HerdrError } = require("../lib/herdr");
+const { run: herdrRun, notify, HerdrError } = require("../lib/herdr");
+const { createTiming } = require("../lib/timing");
 const { supportsInlinePrompt } = require("../lib/agents");
 
 const START_ATTEMPTS = 12;
@@ -17,9 +18,18 @@ const READY_POLLS = 40;
 // sent into that repaint are lost.
 const SETTLE_MS = 900;
 const DELIVERY_ATTEMPTS = 3;
+let timing;
+
+function run(args, options) {
+  return timing
+    ? timing.measure(args.slice(0, 2).join(" "), () => herdrRun(args, options))
+    : herdrRun(args, options);
+}
 
 function sleep(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  const wait = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  if (timing) timing.measure("sleep", wait);
+  else wait();
 }
 
 function readRequest(file) {
@@ -125,6 +135,7 @@ function main() {
   if (!file) process.exit(2);
 
   const request = readRequest(file);
+  timing = createTiming(request);
   const { kind, prompt } = request;
 
   const name = uniqueName(kind);
@@ -213,8 +224,10 @@ function promptLanded(name, prompt) {
 
 try {
   const success = main();
+  timing?.finish(success);
   finishRequest(process.argv[2], success);
 } catch (error) {
+  timing?.finish(false);
   finishRequest(process.argv[2], false);
   notify("Quick Prompt failed", `${error.message ?? String(error)} — reopen Quick Prompt to recover your draft.`);
   process.exit(1);

@@ -149,6 +149,7 @@ test("launcher finalizes recovery correctly on success, startup failure, and del
     const launcher = load("bin/launch.js", {
       "node:fs": { readFileSync: () => JSON.stringify({ kind: "test", prompt: "keep me" }) },
       "../lib/state": { finishRequest: (file, success) => finished.push({ file, success }) },
+      "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), finish() {} }) },
       "../lib/agents": { supportsInlinePrompt: () => scenario === "success" },
       "../lib/herdr": {
         HerdrError: Error,
@@ -174,6 +175,30 @@ test("launcher finalizes recovery correctly on success, startup failure, and del
     assert.equal(finished[0].success, scenario === "success", scenario);
     if (scenario !== "success") assert.match(notifications.at(-1)[1], /recover your draft/, scenario);
   }
+});
+
+test("startup timings record stages without prompt text and tolerate logging failures", () => {
+  const writes = [];
+  const io = {
+    mkdirSync() {}, existsSync: () => false,
+    appendFileSync: (_, text) => writes.push(text),
+  };
+  const timing = load("lib/timing.js", {
+    "node:fs": io, "./state": { STATE_DIR: "/tmp/mock-timing" },
+  }).context.module.exports;
+  const trace = timing.createTiming({ kind: "codex", prompt: "PRIVATE PROMPT", submittedAt: Date.now() - 20 });
+  const result = { ok: false, code: "pane_not_ready", message: "PRIVATE ERROR" };
+  assert.equal(trace.measure("agent start", () => result), result);
+  assert.throws(() => trace.measure("tab create", () => { throw new Error("PRIVATE EXCEPTION"); }));
+  trace.finish(false);
+  const saved = JSON.parse(writes[0]);
+  assert.equal(saved.steps[0].code, "pane_not_ready");
+  assert.equal(saved.steps[1].ok, false);
+  assert.ok(saved.dispatchMs >= 0);
+  assert.ok(saved.workerMs >= 0);
+  assert.equal(writes[0].includes("PRIVATE"), false);
+  io.appendFileSync = () => { throw new Error("disk unavailable"); };
+  assert.doesNotThrow(() => trace.finish(false));
 });
 
 test("directory arrows override typed parent, while direct Enter uses the typed path", () => {
