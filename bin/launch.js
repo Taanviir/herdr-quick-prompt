@@ -115,8 +115,9 @@ function startAgent(name, kind, pane, inline) {
     last = res.message;
     // Startup reached the agent but it is not idle: either a trust dialog, or
     // an inline prompt it is already working on. Either way the name is live.
-    if (/agent_not_ready/i.test(last)) return { started: true, ready: false, message: last };
-    if (!/pane|shell|prompt|busy|not_available/i.test(last)) break;
+    const reason = `${res.code ?? ""} ${last}`;
+    if (/agent_not_ready/i.test(reason)) return { started: true, ready: false, message: last };
+    if (!/pane|shell|prompt|busy|not_available/i.test(reason)) break;
     sleep(START_RETRY_MS);
   }
 
@@ -189,7 +190,7 @@ function deliverPrompt(name, prompt) {
     sleep(SETTLE_MS);
 
     const sent = run(["agent", "prompt", name, prompt], { check: false });
-    if (sent.ok === false && !/stalled|blocked|not_ready|busy/i.test(sent.message)) {
+    if (sent.ok === false && !/stalled|blocked|not_ready|busy/i.test(`${sent.code ?? ""} ${sent.message}`)) {
       notify("Quick Prompt", `Could not send the prompt: ${sent.message}`);
       return false;
     }
