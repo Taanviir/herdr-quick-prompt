@@ -5,14 +5,14 @@ prompt — Quick Prompt opens a new tab, starts that agent there, and delivers t
 prompt for you.
 
 ```
-  1 claude   2 codex   3 cursor   4 opencode   5 pi   6 agy   +16 ctrl+k
+  1 claude   2 codex   3 cursor   4 opencode   5 pi           +17 ctrl+k
 
 › refactor the auth module to use the new token format
 
 
-→ new tab in ~/projects/budgit                                 ctrl+t
-
-⏎ launch · tab agent · ctrl+j newline · esc cancel
+───────────────────────────────────────────────────────────────────────
+→ new tab · ~/projects/budgit                                     ctrl+t
+⏎ launch · tab agent · ctrl+v paste · ctrl+j newline · esc cancel
 ```
 
 ## Install
@@ -62,6 +62,7 @@ press `enter`.
 | --- | --- |
 | `⏎` | launch (an empty prompt just opens the agent) |
 | `ctrl+j` | newline in the prompt |
+| `ctrl+v` | paste from the system clipboard |
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1`…`alt+9` | jump straight to a numbered agent |
 | `ctrl+k` | the full agent list, filterable by typing |
@@ -71,10 +72,18 @@ press `enter`.
 Editing keys work as you would expect: `ctrl+a`/`ctrl+e`, `ctrl+w`, `ctrl+u`,
 arrows, backspace, delete.
 
-Agents are ordered by what you used last, then by what is actually installed —
-a filled dot in the `ctrl+k` list marks agents found on your `PATH`, and the rest
-are kinds Herdr supports but that are not installed here. Your last agent and
-destination are remembered.
+The numbered chips are the agents you actually have installed, most recently
+used first, so `alt+1`–`alt+9` always mean something. Every kind Herdr supports
+is behind `ctrl+k`, where a filled dot marks the installed ones. Your last agent
+and destination are remembered.
+
+Pasting works whether or not your terminal supports it. A paste arrives as a
+burst of keypresses where a newline would otherwise mean "launch" and a tab
+would mean "next agent", so the picker collects the whole burst and inserts it
+as text: bracketed paste when the terminal marks it, and a byte-count check when
+it does not. `ctrl+v` is not a terminal paste at all — the byte reaches the
+application — so the picker reads your clipboard itself through `wl-paste`,
+`xclip`, `xsel`, `pbpaste`, or PowerShell on WSL and Windows.
 
 A new tab is labelled with the first line of your prompt, the agent opens in the
 directory of the pane you invoked from, and it is named `qp-<kind>` so you can

@@ -2,7 +2,9 @@
 
 // Popup entrypoint: one screen. The cursor starts in the prompt because that is
 // what you came here to write; the agent and the destination are one keystroke
-// away, and the full agent list is behind ctrl+k rather than in your way.
+// away, and the agents you do not have installed stay behind ctrl+k.
+//
+// Herdr draws the popup's border and title, so this renders bare inside it.
 
 const readline = require("node:readline");
 const path = require("node:path");
@@ -13,6 +15,8 @@ const { Editor } = require("../lib/editor");
 const { spawnDetached, notify } = require("../lib/herdr");
 const { STATE_DIR, readPrefs, remember, writeRequest } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
+const { sanitizePasted } = require("../lib/text");
+const { readClipboard } = require("../lib/clipboard");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
 
@@ -21,6 +25,10 @@ const DESTINATIONS = [
   { id: "right", label: "split right" },
   { id: "down", label: "split down" },
 ];
+
+// Enough chips to be useful on a machine with nothing installed yet.
+const MIN_CHIPS = 5;
+const SHORTCUTS = 9;
 
 function context() {
   try {
@@ -39,34 +47,64 @@ const prefs = readPrefs();
 const agents = catalog(prefs.recents);
 const out = process.stdout;
 
+// A paste is a burst of keypresses: inside it a newline is content, not "launch",
+// and a tab is content, not "next agent". Bracketed paste gives explicit markers;
+// the byte-count check covers terminals that do not send them.
+const BURST_BYTES = 6;
+const ESC = 0x1b;
+
+const paste = { active: false, text: "" };
+let burst = "";
+let swallow = false;
+
 const state = {
   agent: Math.max(0, agents.findIndex((a) => a.kind === prefs.recents[0])),
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === prefs.destination)),
   prompt: new Editor(),
-  chipStart: 0,
   overlay: null, // { filter, index } while the full agent list is open
+  notice: null, // replaces the hint line until the next keypress
 };
 
-// Herdr's popup draws its own border and title, so this renders inside it. Lines
-// stop one cell short of the last column: writing into the final cell leaves the
-// terminal in a pending-wrap state that pushes the rest onto the next row.
+// Every cell inside the popup has to be written: cells this never paints show
+// whatever was on the screen behind it.
 const GUTTER = 1;
-const width = () => Math.max(32, out.columns ?? 64);
+const width = () => Math.max(40, out.columns ?? 73);
 const height = () => Math.max(8, out.rows ?? 12);
-const content = () => Math.max(20, width() - GUTTER * 2);
+const content = () => Math.max(28, width() - GUTTER * 2);
 const agent = () => agents[state.agent];
 const destination = () => DESTINATIONS[state.destination];
 
+// The chip row is the agents you actually have, plus whatever is selected. The
+// other twenty kinds Herdr knows about are noise until you go looking (ctrl+k).
+function chipAgents() {
+  const installed = agents.filter((item) => item.installed || item === agent());
+  return installed.length >= MIN_CHIPS ? installed : agents.slice(0, MIN_CHIPS);
+}
+
 /* ---------- rendering ---------- */
+
+// Every keypress from one read arrives in the same tick, so a paste repaints
+// once instead of once per character.
+let queued = false;
+
+function scheduleRender() {
+  if (queued) return;
+  queued = true;
+  setImmediate(() => {
+    queued = false;
+    render();
+  });
+}
 
 function render() {
   const inner = content();
   const rows = height();
   const body = state.overlay ? overlayBody(inner, rows) : mainBody(inner, rows);
 
-  const painted = body.lines
-    .slice(0, rows)
-    .map((line) => " ".repeat(GUTTER) + truncate(line, inner));
+  const painted = [];
+  for (let row = 0; row < rows; row += 1) {
+    painted.push(" ".repeat(GUTTER) + pad(truncate(body.lines[row] ?? "", inner), inner));
+  }
 
   out.write(`\x1b[2J\x1b[H${painted.join("\r\n")}`);
 
@@ -77,90 +115,76 @@ function render() {
   }
 }
 
-function mainBody(content, rows) {
+function mainBody(inner, rows) {
   const lines = new Array(rows).fill("");
-  lines[0] = chipRow(content);
+  lines[1] = chipRow(inner);
 
-  const promptTop = 2;
-  const promptRows = Math.max(1, rows - 6);
-  const caret = promptBlock(lines, promptTop, promptRows, content);
+  const caret = promptBlock(lines, 3, Math.max(1, rows - 6), inner);
 
-  lines[rows - 3] = destinationRow(content);
-  lines[rows - 1] = style.dim(hints());
+  lines[rows - 3] = style.dim("─".repeat(inner));
+  lines[rows - 2] = destinationRow(inner);
+  lines[rows - 1] = state.notice ? style.warn(state.notice) : style.dim(hints());
   return { lines, caret };
 }
 
-// Agents as a row of chips, windowed so the selected one is always visible. The
-// first nine carry their alt+N number so the shortcut is visible rather than
-// something you have to remember.
-const SHORTCUTS = 9;
-const chipLabel = (index, kind) => (index < SHORTCUTS ? `${index + 1} ${kind}` : kind);
+function chipRow(inner) {
+  const chips = chipAgents();
+  const label = (item, index) => (index < SHORTCUTS ? `${index + 1} ${item.kind}` : item.kind);
 
-function chipRow(content) {
-  const chip = (item, index, active) => {
-    if (active) return style.selected(` ${chipLabel(index, item.kind)} `);
-    const number = index < SHORTCUTS ? style.dim(`${index + 1} `) : "";
-    return ` ${number}${item.installed ? item.kind : style.dim(item.kind)} `;
-  };
+  const hint = `ctrl+k`;
+  const room = inner - hint.length - 6;
 
-  const room = content - "ctrl+k".length - 2;
-  const fits = (start) => {
-    const shown = [];
-    let used = 0;
-    for (let i = start; i < agents.length; i += 1) {
-      const next = chipLabel(i, agents[i].kind).length + 2 + (shown.length ? 1 : 0);
-      if (used + next > room) break;
-      used += next;
-      shown.push(i);
-    }
-    return shown;
-  };
-
-  if (state.agent < state.chipStart) state.chipStart = state.agent;
-  let shown = fits(state.chipStart);
-  while (!shown.includes(state.agent) && state.chipStart < agents.length - 1) {
-    state.chipStart += 1;
-    shown = fits(state.chipStart);
+  const shown = [];
+  let used = 0;
+  for (let i = 0; i < chips.length; i += 1) {
+    const next = label(chips[i], i).length + 2 + (shown.length ? 1 : 0);
+    if (used + next > room && shown.length > 0) break;
+    used += next;
+    shown.push(i);
   }
 
-  const row = shown.map((i) => chip(agents[i], i, i === state.agent)).join(" ");
+  const row = shown
+    .map((i) => {
+      const item = chips[i];
+      const text = label(item, i);
+      if (item === agent()) return style.selected(` ${text} `);
+      const number = i < SHORTCUTS ? style.dim(`${i + 1} `) : "";
+      return ` ${number}${item.kind} `;
+    })
+    .join(" ");
+
   const hidden = agents.length - shown.length;
-  const tail = style.dim(hidden > 0 ? `+${hidden} ctrl+k` : "ctrl+k");
-  const gap = Math.max(1, content - displayWidth(row) - displayWidth(tail));
+  const tail = style.dim(hidden > 0 ? `+${hidden} ${hint}` : hint);
+  const gap = Math.max(1, inner - displayWidth(row) - displayWidth(tail));
   return row + " ".repeat(gap) + tail;
 }
 
-function promptBlock(lines, top, rows, content) {
-  const { rows: wrapped, caret } = state.prompt.layout(content - 2);
+function promptBlock(lines, top, rows, inner) {
+  const { rows: wrapped, caret } = state.prompt.layout(inner - 2);
   const from = Math.max(0, caret.row - rows + 1);
-  const visible = wrapped.slice(from, from + rows);
 
-  visible.forEach((line, index) => {
+  wrapped.slice(from, from + rows).forEach((line, index) => {
     const marker = from + index === 0 ? style.accent("› ") : "  ";
-    lines[top + index] = marker + line;
+    lines[top + index] = marker + style.bright(line);
   });
-
-  if (state.prompt.text === "") {
-    lines[top] = `${style.accent("› ")}${style.dim("what should it work on?")}`;
-  }
 
   return { row: top + (caret.row - from), col: 2 + caret.col };
 }
 
 // The popup's title bar has no room for the working directory, so it rides along
 // with the destination: what will happen, and where.
-function destinationRow(content) {
+function destinationRow(inner) {
   const hint = style.dim("ctrl+t");
-  const room = content - displayWidth(hint) - 4;
+  const room = inner - displayWidth(hint) - 4;
   const where = shortenPath(cwd, Math.max(12, room - destination().label.length - 5));
-  const label = style.dim(`→ ${destination().label} in ${where}`);
-  const gap = Math.max(1, content - displayWidth(label) - displayWidth(hint));
+  const label = `${style.dim("→")} ${destination().label} ${style.dim(`· ${where}`)}`;
+  const gap = Math.max(1, inner - displayWidth(label) - displayWidth(hint));
   return label + " ".repeat(gap) + hint;
 }
 
 function hints() {
-  if (state.prompt.isEmpty) return "⏎ open agent · tab agent · alt+1-9 · esc cancel";
-  return "⏎ launch · tab agent · ctrl+j newline · esc cancel";
+  const verb = state.prompt.isEmpty ? "⏎ open agent" : "⏎ launch";
+  return `${verb} · tab agent · ctrl+v paste · ctrl+j newline · esc cancel`;
 }
 
 /* ---------- the full agent list ---------- */
@@ -170,8 +194,8 @@ function overlayMatches() {
   return agents.filter((item) => item.kind.includes(needle));
 }
 
-function overlayBody(content, bodyHeight) {
-  const lines = new Array(bodyHeight).fill("");
+function overlayBody(inner, rows) {
+  const lines = new Array(rows).fill("");
   const list = overlayMatches();
 
   lines[0] = state.overlay.filter
@@ -180,37 +204,115 @@ function overlayBody(content, bodyHeight) {
 
   if (list.length === 0) {
     lines[1] = style.warn("no agent kind matches that filter");
-    lines[bodyHeight - 1] = style.dim("esc back");
+    lines[rows - 1] = style.dim("esc back");
     return { lines, caret: null };
   }
 
-  // The list needs every row it can get, so it runs from just under the filter
-  // down to the hint line.
-  const room = bodyHeight - 2;
+  const room = rows - 2;
   const active = Math.min(state.overlay.index, list.length - 1);
   const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
 
   list.slice(start, start + room).forEach((item, index) => {
     const at = start + index;
     const mark = item.installed ? style.ok("●") : style.dim("○");
-    const name = pad(item.kind, Math.max(10, content - 6));
+    const name = pad(item.kind, Math.max(10, inner - 6));
     lines[1 + index] = at === active ? `${style.selected(` ${name}`)} ${mark}` : ` ${name} ${mark}`;
   });
 
-  lines[bodyHeight - 1] = style.dim("↑↓ select · type to filter · ⏎ choose · esc back");
+  lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ choose · esc back");
   return { lines, caret: null };
 }
 
 /* ---------- input ---------- */
 
 function onKey(chunk, key = {}) {
+  if (key.name === "paste-start") {
+    paste.active = true;
+    paste.text = "";
+    return;
+  }
+  if (key.name === "paste-end") {
+    paste.active = false;
+    insertPasted(paste.text);
+    paste.text = "";
+    return scheduleRender();
+  }
+  if (paste.active) {
+    paste.text += typeof chunk === "string" ? chunk : "";
+    return;
+  }
+  // Keypresses belonging to a burst this already handled as pasted text.
+  if (swallow) return;
+
   if (key.ctrl && key.name === "c") return quit(0);
+  if (key.ctrl && key.name === "v") {
+    pasteFromClipboard();
+    return scheduleRender();
+  }
   if (state.overlay) return onOverlayKey(chunk, key);
   return onMainKey(chunk, key);
 }
 
+// Runs before the keypress events for the same chunk, so it can claim a burst
+// the terminal did not mark as a paste.
+function onData(chunk) {
+  if (paste.active || swallow) return;
+  if (chunk[0] === ESC) return; // an escape sequence, however long, is not a paste
+  if (chunk.length <= BURST_BYTES) return;
+
+  burst = chunk.toString("utf8");
+  swallow = true;
+  setImmediate(() => {
+    swallow = false;
+    const text = burst;
+    burst = "";
+    if (!text) return;
+    insertPasted(text);
+    render();
+  });
+}
+
+// Reading the clipboard can block for a second on WSL, so say what is happening
+// before going to fetch it.
+function pasteFromClipboard() {
+  state.notice = "reading clipboard…";
+  render();
+
+  const text = readClipboard();
+  state.notice = null;
+
+  if (text === null) {
+    state.notice = "no clipboard tool found — install xclip, xsel or wl-clipboard";
+    return;
+  }
+  if (!text) {
+    state.notice = "clipboard is empty";
+    return;
+  }
+  insertPasted(text);
+}
+
+function insertPasted(text) {
+  const clean = sanitizePasted(text);
+  if (!clean) return;
+  if (state.overlay) {
+    state.overlay.filter += clean.replace(/\n/g, "").toLowerCase();
+    state.overlay.index = 0;
+    return;
+  }
+  state.prompt.insert(clean);
+}
+
+function cycleAgent(step) {
+  const chips = chipAgents();
+  const at = chips.indexOf(agent());
+  const next = chips[(Math.max(0, at) + step + chips.length) % chips.length];
+  state.agent = agents.indexOf(next);
+}
+
 function onMainKey(chunk, key) {
   const prompt = state.prompt;
+  state.notice = null;
 
   switch (true) {
     case key.name === "escape":
@@ -222,10 +324,10 @@ function onMainKey(chunk, key) {
       prompt.insert("\n");
       break;
     case key.name === "tab" && key.shift:
-      state.agent = (state.agent - 1 + agents.length) % agents.length;
+      cycleAgent(-1);
       break;
     case key.name === "tab":
-      state.agent = (state.agent + 1) % agents.length;
+      cycleAgent(1);
       break;
     case key.ctrl && key.name === "k":
       state.overlay = { filter: "", index: state.agent };
@@ -266,7 +368,7 @@ function onMainKey(chunk, key) {
     default:
       return;
   }
-  render();
+  scheduleRender();
 }
 
 function onOverlayKey(chunk, key) {
@@ -299,13 +401,13 @@ function onOverlayKey(chunk, key) {
     default:
       return;
   }
-  render();
+  scheduleRender();
 }
 
-// alt+N always means the same agent, whether or not its chip is on screen; the
-// row scrolls to it. Anything further away is what ctrl+k is for.
+// alt+N always means the same agent as the chip numbered N.
 function pickChip(index) {
-  if (index < agents.length) state.agent = index;
+  const chips = chipAgents();
+  if (index < chips.length) state.agent = agents.indexOf(chips[index]);
 }
 
 function isPrintable(chunk, key) {
@@ -333,7 +435,7 @@ function launch() {
 }
 
 function quit(code) {
-  out.write("\x1b[?25h\x1b[2J\x1b[H");
+  out.write("\x1b[?2004l\x1b[?25h\x1b[2J\x1b[H");
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.exit(code);
 }
@@ -361,6 +463,11 @@ if (!process.stdin.isTTY) {
   process.stderr.write("quick-prompt: picker needs an interactive terminal\n");
   process.exit(1);
 }
+
+// Ask the terminal to wrap pastes in markers, and register the raw-data
+// listener before readline's so it sees each chunk first.
+out.write("\x1b[?2004h");
+process.stdin.on("data", onData);
 
 readline.emitKeypressEvents(process.stdin);
 process.stdin.setRawMode(true);
