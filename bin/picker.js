@@ -48,6 +48,8 @@ const originPane = process.env.QUICK_PROMPT_PANE ?? ctx.focused_pane_id ?? proce
 const prefs = readPrefs();
 const agents = catalog();
 const recovered = readFailedRequest();
+// Cleared once the draft has been taken up or thrown away, so neither happens twice.
+let recoveredFile = recovered?.file ?? null;
 const out = process.stdout;
 
 // A paste is a burst of keypresses: inside it a newline is content, not "launch",
@@ -552,6 +554,13 @@ function onMainKey(chunk, key) {
       break;
     case key.ctrl && key.name === "u":
       prompt.clear();
+      // The recovery notice offers this as the way to be rid of the draft, so
+      // it has to actually throw it away rather than just empty the buffer.
+      if (recoveredFile) {
+        discardRequest(recoveredFile);
+        recoveredFile = null;
+        state.notice = "recovered draft discarded";
+      }
       break;
     case key.ctrl && key.name === "w":
       prompt.deleteWord();
@@ -626,7 +635,10 @@ function launch() {
   });
 
   spawnDetached(process.execPath, [LAUNCHER, request]);
-  if (recovered) discardRequest(recovered.file);
+  if (recoveredFile) {
+    discardRequest(recoveredFile);
+    recoveredFile = null;
+  }
   quit(0);
 }
 

@@ -44,11 +44,15 @@ test("structured readiness errors preserve their code and do not restart an agen
   assert.equal(calls, 1);
 });
 
-function picker(recovered = null) {
+function picker(recovered = null, discarded = []) {
   return load("bin/picker.js", {
     "../lib/agents": { catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
       .map((kind) => ({ kind, installed: false })) },
-    "../lib/state": { readPrefs: () => ({ recents: [], directories: [] }), readFailedRequest: () => recovered },
+    "../lib/state": {
+      readPrefs: () => ({ recents: [], directories: [] }),
+      readFailedRequest: () => recovered,
+      discardRequest: (file) => discarded.push(file),
+    },
     "../lib/dirs": {
       expand: (value) => value,
       isDirectory: (value) => ["/tmp/", "/tmp/child"].includes(value),
@@ -232,4 +236,43 @@ test("setup detects both TOML quote styles and treats punctuation literally", ()
       }
     }
   }
+});
+
+test("clearing a recovered draft throws it away instead of emptying the buffer", () => {
+  const recovered = { file: "/tmp/failed-request-1-1.json", request: { kind: "codex", prompt: "lost work" } };
+  const discarded = [];
+  const ui = picker(recovered, discarded);
+
+  assert.equal(ui.evaluate("state.prompt.text"), "lost work");
+  ui.evaluate('onMainKey("", { ctrl: true, name: "u" })');
+
+  assert.equal(ui.evaluate("state.prompt.text"), "");
+  assert.deepEqual(discarded, [recovered.file], "the notice offers ctrl+u as the way to be rid of it");
+  assert.match(ui.evaluate("state.notice"), /discarded/);
+
+  ui.evaluate('onMainKey("", { ctrl: true, name: "u" })');
+  assert.deepEqual(discarded, [recovered.file], "a second clear must not discard anything again");
+});
+
+test("reading a draft sweeps the older and unreadable ones it passes", (t) => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-sweep-test-"));
+  t.after(() => {
+    for (const name of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, name));
+    fs.rmdirSync(dir);
+  });
+
+  const state = load("lib/state.js", {}, "const STATE_DIR =");
+  state.context.process.env.HERDR_PLUGIN_STATE_DIR = dir;
+  const source = fs.readFileSync(path.resolve(__dirname, "../lib/state.js"), "utf8");
+  vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
+
+  const write = (name, body) => fs.writeFileSync(path.join(dir, name), body);
+  write("failed-request-1000000000000-1.json", JSON.stringify({ kind: "codex", prompt: "oldest" }));
+  write("failed-request-2000000000000-2.json", "{ not json");
+  write("failed-request-3000000000000-3.json", JSON.stringify({ kind: "claude", prompt: "newest" }));
+
+  const found = state.context.module.exports.readFailedRequest();
+  assert.equal(found.request.prompt, "newest");
+  assert.deepEqual(fs.readdirSync(dir), ["failed-request-3000000000000-3.json"],
+    "only the draft that can still be offered is kept");
 });
