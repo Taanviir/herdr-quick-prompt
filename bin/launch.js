@@ -119,10 +119,12 @@ function startAgent(name, kind, pane, inline) {
     if (res.ok) return { started: true, ready: true };
 
     last = res.message;
-    // Startup reached the agent but it is not idle: either a trust dialog, or
-    // an inline prompt it is already working on. Either way the name is live.
+    // Startup reached the agent but it is not idle: a trust dialog, or an
+    // inline prompt it is already working on. `agent_pane_busy` on a pane this
+    // launch created is the same agent, seen by a retry after readiness timed
+    // out. Either way the name is live.
     const reason = `${res.code ?? ""} ${last}`;
-    if (/agent_not_ready/i.test(reason)) return { started: true, ready: false, message: last };
+    if (/agent_not_ready|agent_pane_busy/i.test(reason)) return { started: true, ready: false, message: last };
     if (!/pane|shell|prompt|busy|not_available/i.test(reason)) break;
     sleep(START_RETRY_MS);
   }
