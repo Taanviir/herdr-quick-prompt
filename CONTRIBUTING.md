@@ -129,17 +129,9 @@ constraint — not what the line does.
 ## Releasing
 
 Versions live in two places and must agree: `version` in `herdr-plugin.toml`
-and `version` in `package.json`. To cut a release:
-
-1. Bump both, commit as `Version X.Y.Z`, and get it onto `main`.
-2. Tag and push:
-
-   ```bash
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
-
-The `Release` workflow runs the tests, refuses a tag that disagrees with the
-manifest, and publishes a GitHub release with generated notes and the
-`herdr plugin install --ref vX.Y.Z` command. Nothing is built or uploaded; the
-tag is the artifact.
+and `version` in `package.json`. A release is a merge to `main` that bumps
+them: commit the bump as `Version X.Y.Z` in the PR, and when it lands the
+`Release` workflow runs the tests and publishes `vX.Y.Z` with generated notes
+and the `herdr plugin install --ref vX.Y.Z` command. A merge that leaves the
+version alone publishes nothing. Nothing is built or uploaded; the tag is the
+artifact.
