@@ -44,6 +44,22 @@ test("structured readiness errors preserve their code and do not restart an agen
   assert.equal(calls, 1);
 });
 
+test("an agent busy with its inline prompt counts as started after readiness times out", () => {
+  const replies = [
+    { ok: false, code: "timeout", message: "agent did not reach its prompt" },
+    { ok: false, code: "agent_pane_busy", message: "pane already runs an agent" },
+  ];
+  let calls = 0;
+  const launcher = load("bin/launch.js", {
+    "../lib/herdr": { run: () => replies[calls++] },
+  }, "try {\n  const success = main();");
+  launcher.evaluate("sleep = () => {}");
+  const started = launcher.evaluate('startAgent("qp-claude", "claude", "pane", "do the thing")');
+  assert.equal(started.started, true);
+  assert.equal(started.ready, false);
+  assert.equal(calls, 2);
+});
+
 function picker(recovered = null, discarded = []) {
   return load("bin/picker.js", {
     "../lib/agents": { catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]

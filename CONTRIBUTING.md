@@ -125,3 +125,21 @@ to match and regenerating all four.
 Match what is there: plain CommonJS, no dependencies, no build step. Comments
 explain why something is the way it is — a terminal quirk, an ordering
 constraint — not what the line does.
+
+## Releasing
+
+Versions live in two places and must agree: `version` in `herdr-plugin.toml`
+and `version` in `package.json`. To cut a release:
+
+1. Bump both, commit as `Version X.Y.Z`, and get it onto `main`.
+2. Tag and push:
+
+   ```bash
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+The `Release` workflow runs the tests, refuses a tag that disagrees with the
+manifest, and publishes a GitHub release with generated notes and the
+`herdr plugin install --ref vX.Y.Z` command. Nothing is built or uploaded; the
+tag is the artifact.
