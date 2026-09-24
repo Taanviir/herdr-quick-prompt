@@ -353,3 +353,16 @@ test("modifier keys from Linux, Windows and macOS terminals edit by word", () =>
   ui.evaluate("onDirsKey(undefined, {name: 'backspace', meta: true})");
   assert.equal(ui.evaluate("state.overlay.input.text"), "/tmp/a ");
 });
+
+test("backslash-Enter, alt+Enter and ctrl+j add a newline while plain Enter launches", () => {
+  const ui = picker();
+  ui.evaluate("launched = 0; launch = () => { launched += 1 }");
+  ui.evaluate("state.prompt = new Editor('first\\\\'); onMainKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "first\n");
+  ui.evaluate("onMainKey(undefined, {name: 'return', meta: true})");
+  ui.evaluate("onMainKey('\\n', {name: 'enter'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "first\n\n\n");
+  assert.equal(ui.evaluate("launched"), 0);
+  ui.evaluate("onMainKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("launched"), 1);
+});

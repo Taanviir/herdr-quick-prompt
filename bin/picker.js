@@ -208,7 +208,7 @@ function destinationRow(inner) {
 
 function hints() {
   const verb = state.prompt.isEmpty ? "⏎ open agent" : "⏎ launch";
-  return `${verb} · tab agent · ctrl+v paste · ctrl+j newline · esc cancel`;
+  return `${verb} · tab agent · ctrl+v paste · \\⏎ newline · esc cancel`;
 }
 
 /* ---------- the full agent list ---------- */
@@ -488,10 +488,13 @@ function onMainKey(chunk, key) {
       break;
     case key.name === "escape":
       return quit(0);
-    // \r launches; \n (ctrl+j) inserts a newline.
+    case isNewline(chunk, key):
+      prompt.insert("\n");
+      break;
+    // A backslash before Enter asks for a newline instead, as in Claude Code.
     case chunk === "\r" || key.name === "return":
-      return launch();
-    case chunk === "\n" || (key.ctrl && key.name === "j"):
+      if (prompt.cells[prompt.cursor - 1] !== "\\") return launch();
+      prompt.backspace();
       prompt.insert("\n");
       break;
     case key.name === "tab" && key.shift:
@@ -526,6 +529,13 @@ function onMainKey(chunk, key) {
       if (!editKey(prompt, chunk, key)) return;
   }
   scheduleRender();
+}
+
+// Plain \r launches. \n is ctrl+j, and ctrl+enter in terminals that send it.
+// ESC \r is alt+enter, and shift+enter in terminals set up the way Claude
+// Code's /terminal-setup does it.
+function isNewline(chunk, key) {
+  return chunk === "\n" || (key.ctrl && key.name === "j") || (key.meta && key.name === "return");
 }
 
 // The editing keys shared by the prompt and the directory field, covering what
