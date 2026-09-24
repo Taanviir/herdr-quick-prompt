@@ -321,3 +321,35 @@ test("requests abandoned by a killed worker are swept, live ones are not", (t) =
   assert.equal(fs.existsSync(live), true, "a request that could still be in flight is left alone");
   assert.equal(fs.existsSync(draft), true, "recoverable drafts are not requests and are not swept");
 });
+
+test("word motion and deletion stop at whitespace from either side", () => {
+  const { Editor } = require("../lib/editor");
+  const editor = new Editor("fix  the bug");
+  editor.wordLeft();
+  assert.equal(editor.cursor, 9);
+  editor.wordLeft();
+  assert.equal(editor.cursor, 5);
+  editor.wordRight();
+  assert.equal(editor.cursor, 8);
+  editor.deleteWordForward();
+  assert.equal(editor.text, "fix  the");
+  editor.deleteWord();
+  assert.equal(editor.text, "fix  ");
+});
+
+test("modifier keys from Linux, Windows and macOS terminals edit by word", () => {
+  const ui = picker();
+  const keys = (list) => ui.evaluate(`state.prompt = new Editor('one two three'); ${list}; state.prompt`);
+  const cursorAfter = (list) => keys(list).cursor;
+  assert.equal(cursorAfter("onMainKey(undefined, {name: 'left', ctrl: true})"), 8);
+  assert.equal(cursorAfter("onMainKey(undefined, {name: 'left', meta: true})"), 8);
+  assert.equal(cursorAfter("onMainKey(undefined, {name: 'b', meta: true})"), 8);
+  assert.equal(cursorAfter("onMainKey(undefined, {name: 'home'}); onMainKey(undefined, {name: 'f', meta: true})"), 3);
+  assert.equal(cursorAfter("onMainKey(undefined, {name: 'home'}); onMainKey(undefined, {name: 'right', ctrl: true})"), 3);
+  assert.equal(keys("onMainKey(undefined, {name: 'backspace', meta: true})").text, "one two ");
+  assert.equal(keys("onMainKey('\\b', {name: 'backspace'})").text, "one two ");
+  assert.equal(keys("onMainKey(undefined, {name: 'home'}); onMainKey(undefined, {name: 'd', meta: true})").text, " two three");
+  ui.evaluate("openDirectories(); state.overlay.input = new Editor('/tmp/a b')");
+  ui.evaluate("onDirsKey(undefined, {name: 'backspace', meta: true})");
+  assert.equal(ui.evaluate("state.overlay.input.text"), "/tmp/a ");
+});

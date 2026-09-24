@@ -347,34 +347,11 @@ function onDirsKey(chunk, key) {
       else if (highlighted) chooseDirectory(highlighted);
       else chooseDirectory(input.text);
       break;
-    case key.ctrl && key.name === "u":
-      input.clear();
-      edited();
-      break;
-    case key.ctrl && key.name === "w":
-      input.deleteWord();
-      edited();
-      break;
-    case key.name === "backspace":
-      input.backspace();
-      edited();
-      break;
-    case key.name === "delete":
-      input.deleteForward();
-      edited();
-      break;
-    case key.name === "left":
-      input.move(-1);
-      break;
-    case key.name === "right":
-      input.move(1);
-      break;
-    case isPrintable(chunk, key):
-      input.insert(chunk);
-      edited();
-      break;
-    default:
-      return;
+    default: {
+      const before = input.text;
+      if (!editKey(input, chunk, key)) return;
+      if (input.text !== before) edited();
+    }
   }
   scheduleRender();
 }
@@ -535,24 +512,6 @@ function onMainKey(chunk, key) {
     case key.meta && /^[1-9]$/.test(key.name ?? ""):
       pickChip(Number(key.name) - 1);
       break;
-    case key.name === "backspace":
-      prompt.backspace();
-      break;
-    case key.name === "delete":
-      prompt.deleteForward();
-      break;
-    case key.name === "left":
-      prompt.move(-1);
-      break;
-    case key.name === "right":
-      prompt.move(1);
-      break;
-    case key.ctrl && key.name === "a":
-      prompt.toLineStart();
-      break;
-    case key.ctrl && key.name === "e":
-      prompt.toLineEnd();
-      break;
     case key.ctrl && key.name === "u":
       prompt.clear();
       // The recovery notice offers this as the way to be rid of the draft, so
@@ -563,16 +522,59 @@ function onMainKey(chunk, key) {
         state.notice = "recovered draft discarded";
       }
       break;
-    case key.ctrl && key.name === "w":
-      prompt.deleteWord();
-      break;
-    case isPrintable(chunk, key):
-      prompt.insert(chunk);
-      break;
     default:
-      return;
+      if (!editKey(prompt, chunk, key)) return;
   }
   scheduleRender();
+}
+
+// The editing keys shared by the prompt and the directory field, covering what
+// Linux, Windows and macOS terminals send for them. macOS terminals with Option
+// as Meta send alt+b / alt+f for option+arrow, and cmd+arrow arrives as
+// ctrl+a / ctrl+e or Home / End. Returns whether the key was one of these.
+function editKey(editor, chunk, key) {
+  switch (true) {
+    case (key.name === "left" && (key.ctrl || key.meta)) || (key.meta && key.name === "b"):
+      editor.wordLeft();
+      break;
+    case (key.name === "right" && (key.ctrl || key.meta)) || (key.meta && key.name === "f"):
+      editor.wordRight();
+      break;
+    case key.name === "left":
+      editor.move(-1);
+      break;
+    case key.name === "right":
+      editor.move(1);
+      break;
+    case key.name === "home" || (key.ctrl && key.name === "a"):
+      editor.toLineStart();
+      break;
+    case key.name === "end" || (key.ctrl && key.name === "e"):
+      editor.toLineEnd();
+      break;
+    // ctrl+backspace arrives as a bare \b in most terminals.
+    case (key.name === "backspace" && key.meta) || chunk === "\b" || (key.ctrl && key.name === "w"):
+      editor.deleteWord();
+      break;
+    case (key.name === "delete" && (key.ctrl || key.meta)) || (key.meta && key.name === "d"):
+      editor.deleteWordForward();
+      break;
+    case key.name === "backspace":
+      editor.backspace();
+      break;
+    case key.name === "delete":
+      editor.deleteForward();
+      break;
+    case key.ctrl && key.name === "u":
+      editor.clear();
+      break;
+    case isPrintable(chunk, key):
+      editor.insert(chunk);
+      break;
+    default:
+      return false;
+  }
+  return true;
 }
 
 function onAgentsKey(chunk, key) {
