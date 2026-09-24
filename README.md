@@ -63,7 +63,7 @@ press `enter`.
 | Key | |
 | --- | --- |
 | `⏎` | launch (an empty prompt just opens the agent) |
-| `\` `⏎`, `alt+⏎`, `ctrl+j` | newline in the prompt |
+| `\` `⏎`, `shift+⏎`, `ctrl+⏎`, `alt+⏎`, `ctrl+j` | newline in the prompt |
 | `ctrl+v` | paste from the system clipboard |
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1`…`alt+9` | jump straight to a numbered agent |
