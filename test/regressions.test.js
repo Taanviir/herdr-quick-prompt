@@ -366,3 +366,16 @@ test("backslash-Enter, alt+Enter and ctrl+j add a newline while plain Enter laun
   ui.evaluate("onMainKey('\\r', {name: 'return'})");
   assert.equal(ui.evaluate("launched"), 1);
 });
+
+test("kitty protocol keys come back as the legacy bytes readline knows", () => {
+  const { legacyKeys } = require("../lib/keys");
+  assert.equal(legacyKeys("\x1b[13;2u"), "\n");
+  assert.equal(legacyKeys("\x1b[13;5u"), "\n");
+  assert.equal(legacyKeys("\x1b[13u"), "\r");
+  assert.equal(legacyKeys("\x1b[99;5u"), "\x03");
+  assert.equal(legacyKeys("\x1b[27u"), "\x1b");
+  assert.equal(legacyKeys("\x1b[49;3u"), "\x1b1");
+  assert.equal(legacyKeys("\x1b[127;5u"), "\b");
+  assert.equal(legacyKeys("\x1b[9;2u"), "\x1b[Z");
+  assert.equal(legacyKeys("a\x1b[1;5Db"), "a\x1b[1;5Db");
+});

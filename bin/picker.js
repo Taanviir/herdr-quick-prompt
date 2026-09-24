@@ -9,6 +9,8 @@
 const readline = require("node:readline");
 const path = require("node:path");
 const fs = require("node:fs");
+const { PassThrough } = require("node:stream");
+const { StringDecoder } = require("node:string_decoder");
 
 const { catalog } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
@@ -17,6 +19,7 @@ const { STATE_DIR, readPrefs, remember, writeRequest, readFailedRequest, discard
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
+const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
@@ -531,9 +534,9 @@ function onMainKey(chunk, key) {
   scheduleRender();
 }
 
-// Plain \r launches. \n is ctrl+j, and ctrl+enter in terminals that send it.
-// ESC \r is alt+enter, and shift+enter in terminals set up the way Claude
-// Code's /terminal-setup does it.
+// Plain \r launches. \n is ctrl+j, or shift+enter and ctrl+enter as
+// lib/keys translates them. ESC \r is alt+enter, and shift+enter in terminals
+// set up the way Claude Code's /terminal-setup does it.
 function isNewline(chunk, key) {
   return chunk === "\n" || (key.ctrl && key.name === "j") || (key.meta && key.name === "return");
 }
@@ -656,7 +659,7 @@ function launch() {
 }
 
 function quit(code) {
-  out.write("\x1b[?2004l\x1b[?25h\x1b[2J\x1b[H");
+  out.write(`\x1b[?2004l${KITTY_OFF}\x1b[?25h\x1b[2J\x1b[H`);
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.exit(code);
 }
@@ -685,14 +688,21 @@ if (!process.stdin.isTTY) {
   process.exit(1);
 }
 
-// Ask the terminal to wrap pastes in markers, and register the raw-data
-// listener before readline's so it sees each chunk first.
-out.write("\x1b[?2004h");
-process.stdin.on("data", onData);
+// Ask the terminal to wrap pastes in markers and to tell a modified Enter
+// apart. Each chunk reaches onData before readline sees it as keypresses.
+out.write(`\x1b[?2004h${KITTY_ON}`);
+const decoder = new StringDecoder("utf8");
+const keys = new PassThrough();
+process.stdin.on("data", (raw) => {
+  const chunk = Buffer.from(legacyKeys(decoder.write(raw)));
+  if (!chunk.length) return;
+  onData(chunk);
+  keys.write(chunk);
+});
 
-readline.emitKeypressEvents(process.stdin);
+readline.emitKeypressEvents(keys);
+keys.on("keypress", onKey);
 process.stdin.setRawMode(true);
 process.stdin.resume();
-process.stdin.on("keypress", onKey);
 out.on("resize", render);
 render();
