@@ -72,8 +72,19 @@ press `enter`.
 | `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
 | `esc` | cancel |
 
-Editing keys work as you would expect: `ctrl+a`/`ctrl+e`, `ctrl+w`, `ctrl+u`,
-arrows, backspace, delete.
+Editing keys work as you would expect, in the prompt and the directory field:
+
+| Key | |
+| --- | --- |
+| `ctrl+←`/`→`, `alt+←`/`→`, `alt+b`/`alt+f` | previous / next word |
+| `alt+backspace`, `ctrl+backspace`, `ctrl+w` | delete the word before the cursor |
+| `alt+d`, `ctrl+delete` | delete the word after the cursor |
+| `home`/`end`, `ctrl+a`/`ctrl+e` | start / end of the line |
+| `ctrl+u` | clear |
+
+On macOS, option+arrow moves by word once the terminal sends Option as Meta or
+Esc (iTerm2, Terminal.app, and Ghostty all have the setting), and cmd+arrow works
+wherever the terminal maps it to Home/End or `ctrl+a`/`ctrl+e`.
 
 Up/down moves between displayed prompt lines, including wrapped lines. Long
 directory paths scroll horizontally to keep the cursor visible.
