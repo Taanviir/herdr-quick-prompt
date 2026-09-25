@@ -163,6 +163,46 @@ test("failed requests survive reopening and successful requests are removed", (t
   assert.equal(api.readFailedRequest(), null);
 });
 
+test("a multiline prompt is typed in, since Herdr refuses newlines in launch arguments", () => {
+  const starts = [];
+  const delivered = [];
+  const launcher = load("bin/launch.js", {
+    "node:fs": { readFileSync: () => JSON.stringify({ kind: "claude", prompt: "one\ntwo" }) },
+    "../lib/timing": { createTiming: () => null },
+    "../lib/agents": { supportsInlinePrompt: () => true },
+    "../lib/herdr": {
+      run: (args) => {
+        if (args[0] === "tab") return { ok: true, result: { root_pane: { pane_id: "test-pane" } } };
+        if (args[1] === "start") starts.push(args);
+        return { ok: true, result: {} };
+      },
+    },
+  }, "try {\n  const success = main();");
+  launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  launcher.evaluate("waitInteractive = () => true");
+  launcher.context.deliverPrompt = (_, prompt) => delivered.push(prompt) > 0;
+  assert.equal(launcher.evaluate("main()"), true);
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].includes("--"), false);
+  assert.deepEqual(delivered, ["one\ntwo"]);
+});
+
+test("a launch argument Herdr cannot encode is not retried", () => {
+  let calls = 0;
+  const launcher = load("bin/launch.js", {
+    "../lib/herdr": {
+      run: () => {
+        calls++;
+        return { ok: false, code: "invalid_agent_argument", message: "agent arguments cannot be encoded safely for the target shell" };
+      },
+    },
+  }, "try {\n  const success = main();");
+  launcher.evaluate("sleep = () => {}");
+  const started = launcher.evaluate('startAgent("qp-claude", "claude", "pane", "do the thing")');
+  assert.equal(started.started, false);
+  assert.equal(calls, 1);
+});
+
 test("launcher finalizes recovery correctly on success, startup failure, and delivery failure", () => {
   for (const scenario of ["success", "target-failure", "start-failure", "wait-failure", "delivery-failure"]) {
     const finished = [];

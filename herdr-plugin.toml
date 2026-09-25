@@ -1,6 +1,6 @@
 id = "taanviir.quick-prompt"
 name = "Quick Prompt"
-version = "0.2.0"
+version = "0.2.1"
 min_herdr_version = "0.8.0"
 description = "Pick an agent, type a prompt, launch it in a new tab"
 platforms = ["linux", "macos", "windows"]
