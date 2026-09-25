@@ -124,6 +124,7 @@ function startAgent(name, kind, pane, inline) {
     // launch created is the same agent, seen by a retry after readiness timed
     // out. Either way the name is live.
     const reason = `${res.code ?? ""} ${last}`;
+    if (res.code === "invalid_agent_argument") break;
     if (/agent_not_ready|agent_pane_busy/i.test(reason)) return { started: true, ready: false, message: last };
     if (!/pane|shell|prompt|busy|not_available/i.test(reason)) break;
     sleep(START_RETRY_MS);
@@ -143,7 +144,9 @@ function main() {
   const name = uniqueName(kind);
   const pane = createTarget(request);
 
-  const inline = prompt && supportsInlinePrompt(kind) ? prompt : null;
+  // Herdr refuses a launch argument with a newline in it, so multiline prompts
+  // are typed in instead.
+  const inline = prompt && !prompt.includes("\n") && supportsInlinePrompt(kind) ? prompt : null;
   let delivered = Boolean(inline);
   let started = startAgent(name, kind, pane, inline);
 
