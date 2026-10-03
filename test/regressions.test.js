@@ -1649,3 +1649,23 @@ test("the worker sends a follow-up to the running agent without starting anythin
     if (!ok) assert.match(notifications[0][1], /Fix the build.*agent is blocked.*recover your draft/);
   }
 });
+
+test("a workspace or worktree launch is not kept as the next popup's destination", () => {
+  const { dir, api } = stateIn("qp-sticky-test-");
+  const destination = () => JSON.parse(fs.readFileSync(path.join(dir, "prefs.json"), "utf8")).destination;
+  api.remember("codex", "right", "/tmp", null);
+  assert.equal(destination(), "right");
+  api.remember("codex", "worktree", "/repo", null);
+  assert.equal(destination(), "right");
+  api.remember("codex", "workspace", "/tmp", null);
+  assert.equal(destination(), "right");
+  api.remember("codex", "tab", "/tmp", null);
+  assert.equal(destination(), "tab");
+});
+
+test("a remembered worktree outside a repository opens on a new tab", () => {
+  const prefs = { recents: [], destination: "worktree", directories: [], models: {} };
+  assert.equal(picker(null, { prefs }).evaluate("destination().id"), "tab");
+  const inRepo = picker({ kind: "claude", prompt: "x", destination: "worktree", cwd: "/repo" }, { prefs });
+  assert.equal(inRepo.evaluate("destination().id"), "worktree", "a draft made in a repository keeps it");
+});
