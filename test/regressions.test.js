@@ -88,8 +88,58 @@ function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
       complete: () => ["/tmp/child"],
       suggestions: () => [],
     },
+    "../lib/worktree": { insideRepo: (dir) => dir === "/repo" },
   }, "/* ---------- boot ---------- */", running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {});
 }
+
+test("ctrl+t offers a worktree only inside a git repository, and launch refuses one outside", () => {
+  const drafts = { saved: [], cleared: 0 };
+  const ui = picker(null, drafts);
+  const cycle = () => {
+    const seen = [];
+    for (let i = 0; i < 5; i += 1) {
+      ui.evaluate("cycleDestination()");
+      seen.push(ui.evaluate("destination().id"));
+    }
+    return seen;
+  };
+  assert.equal(cycle().includes("worktree"), false);
+  ui.evaluate("state.cwd = '/repo'");
+  assert.equal(cycle().includes("worktree"), true);
+  ui.evaluate("state.destination = DESTINATIONS.findIndex((d) => d.id === 'worktree'); state.cwd = '/tmp'");
+  ui.evaluate("launch()");
+  assert.match(ui.evaluate("state.notice"), /git repository/);
+  assert.equal(drafts.cleared, 0, "nothing was launched");
+});
+
+test("the worktree destination branches from the prompt and starts the agent in its pane", () => {
+  const calls = [];
+  const worktree = load("lib/worktree.js", {
+    "node:child_process": {
+      // fix-the-login-bug already exists, so the launch takes the next name.
+      spawnSync: (_, args) => ({ status: args.at(-1) === "refs/heads/fix-the-login-bug" ? 0 : 1, stdout: "" }),
+    },
+  }).context.module.exports;
+  const launcher = load("bin/launch.js", {
+    "../lib/worktree": worktree,
+    "node:fs": { readFileSync: () => JSON.stringify({ kind: "claude", prompt: "Fix the login bug", destination: "worktree", cwd: "/repo" }) },
+    "../lib/timing": { createTiming: () => null },
+    "../lib/agents": { supportsInlinePrompt: () => true },
+    "../lib/herdr": {
+      run: (args) => {
+        calls.push(args);
+        if (args[0] === "worktree") return { ok: true, result: { root_pane: { pane_id: "w2:p1" } } };
+        return { ok: true, result: {} };
+      },
+    },
+  }, "try {\n  const success = main();");
+  launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  assert.equal(launcher.evaluate("main()"), true);
+  const created = calls.find((args) => args[0] === "worktree");
+  assert.equal(created.join(" "), "worktree create --cwd /repo --branch fix-the-login-bug-2 --label fix-the-login-bug-2 --focus");
+  const started = calls.find((args) => args[1] === "start");
+  assert.equal(started[started.indexOf("--pane") + 1], "w2:p1");
+});
 
 test("an agent outside the first five remains selected and visible", () => {
   const ui = picker();
