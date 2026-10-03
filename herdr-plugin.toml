@@ -12,6 +12,12 @@ contexts = ["workspace"]
 command = ["node", "bin/open.js"]
 
 [[actions]]
+id = "duplicate"
+title = "Quick Prompt with the focused agent"
+contexts = ["workspace"]
+command = ["node", "bin/open.js", "--duplicate"]
+
+[[actions]]
 id = "setup"
 title = "Set up the Quick Prompt keybinding"
 contexts = ["workspace"]

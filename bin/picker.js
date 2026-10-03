@@ -12,18 +12,21 @@ const fs = require("node:fs");
 const { PassThrough } = require("node:stream");
 const { StringDecoder } = require("node:string_decoder");
 
-const { catalog } = require("../lib/agents");
+const { catalog, runningAgent } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
+const { History } = require("../lib/history");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, writeRequest, readFailedRequest, discardRequest, sweepStaleRequests } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
+const { stage } = require("../lib/dropped");
 const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 const { insideRepo } = require("../lib/worktree");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
+const ATTACHMENTS = path.join(STATE_DIR, "attachments");
 
 const DESTINATIONS = [
   { id: "tab", label: "new tab" },
@@ -53,9 +56,12 @@ const originPane = process.env.QUICK_PROMPT_PANE ?? ctx.focused_pane_id ?? proce
 const prefs = readPrefs();
 const agents = catalog();
 sweepStaleRequests();
-const recovered = readFailedRequest();
-// Cleared once the draft has been taken up or thrown away, so neither happens twice.
-let recoveredFile = recovered?.file ?? null;
+const draft = readDraft();
+// Cleared once the draft has been thrown away, so the notice says so only once.
+let restored = Boolean(draft);
+// The duplicate action starts from the agent in the pane you came from, which
+// is a deliberate ask, so it outranks both a restored draft and recency.
+const duplicate = process.env.QUICK_PROMPT_DUPLICATE ? runningAgent(originPane) : null;
 const out = process.stdout;
 
 // A paste is a burst of keypresses: inside it a newline is content, not "launch",
@@ -70,14 +76,25 @@ let swallow = false;
 // Escapes already acted on, waiting for readline to emit them late.
 let pendingEscapes = 0;
 
+// The first of these that is a kind Herdr knows starts selected.
+function initialAgent(...wanted) {
+  for (const kind of wanted) {
+    const at = agents.findIndex((a) => a.kind === kind);
+    if (at >= 0) return at;
+  }
+  return 0;
+}
+
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
-  agent: Math.max(0, agents.findIndex((a) => a.kind === (recovered?.request.kind ?? prefs.recents[0]))),
-  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (recovered?.request.destination ?? prefs.destination))),
-  prompt: new Editor(recovered?.request.prompt ?? ""),
-  cwd: recovered?.request.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
+  agent: initialAgent(duplicate?.kind, draft?.kind, prefs.recents[0]),
+  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draft?.destination ?? prefs.destination))),
+  prompt: new Editor(draft?.prompt ?? ""),
+  history: new History(readHistory()),
+  cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   overlay: null, // { type: "agents" | "dirs", ... } while a picker is open
-  notice: recovered ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear" : null,
+  notice: draft?.failed ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear"
+    : draft ? "Restored draft · ctrl+u clear" : null,
 };
 
 // Every cell inside the popup has to be written: cells this never paints show
@@ -453,7 +470,7 @@ function onEscape() {
     state.overlay = null;
     return scheduleRender();
   }
-  quit(0);
+  close();
 }
 
 function insertPasted(text) {
@@ -470,7 +487,9 @@ function insertPasted(text) {
     state.overlay.index = 0;
     return;
   }
-  state.prompt.insert(clean);
+  const dropped = stage(clean, ATTACHMENTS);
+  if (dropped?.failed.length) state.notice = `could not copy ${dropped.failed.join(", ")} · pasted its path`;
+  state.prompt.insert(dropped?.text ?? clean);
 }
 
 function cycleAgent(step) {
@@ -485,14 +504,16 @@ function onMainKey(chunk, key) {
   state.notice = null;
 
   switch (true) {
+    // Up and down walk the prompt's own lines first and history only past its
+    // top and bottom, so a multi-line prompt stays editable.
     case key.name === "up":
-      prompt.moveVertical(-1, content() - 2);
+      if (!prompt.moveVertical(-1, content() - 2)) recall(state.history.older(prompt.text));
       break;
     case key.name === "down":
-      prompt.moveVertical(1, content() - 2);
+      if (!prompt.moveVertical(1, content() - 2)) recall(state.history.newer());
       break;
     case key.name === "escape":
-      return quit(0);
+      return close();
     case isNewline(chunk, key):
       prompt.insert("\n");
       break;
@@ -522,18 +543,22 @@ function onMainKey(chunk, key) {
       break;
     case key.ctrl && key.name === "u":
       prompt.clear();
-      // The recovery notice offers this as the way to be rid of the draft, so
-      // it has to actually throw it away rather than just empty the buffer.
-      if (recoveredFile) {
-        discardRequest(recoveredFile);
-        recoveredFile = null;
-        state.notice = "recovered draft discarded";
+      // The draft notice offers this as the way to be rid of the draft, so it
+      // has to actually throw it away rather than just empty the buffer.
+      if (restored) {
+        clearDraft();
+        restored = false;
+        state.notice = "draft discarded";
       }
       break;
     default:
       if (!editKey(prompt, chunk, key)) return;
   }
   scheduleRender();
+}
+
+function recall(text) {
+  if (text !== null) state.prompt = new Editor(text);
 }
 
 // Plain \r launches. \n is ctrl+j, or shift+enter and ctrl+enter as
@@ -656,6 +681,9 @@ function launch() {
   }
 
   remember(chosen.kind, destination().id, state.cwd);
+  recordPrompt(state.prompt.text);
+  // Before the worker exists, so a failure it records is never wiped by this.
+  clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
@@ -667,10 +695,18 @@ function launch() {
   });
 
   spawnDetached(process.execPath, [LAUNCHER, request]);
-  if (recoveredFile) {
-    discardRequest(recoveredFile);
-    recoveredFile = null;
+  quit(0);
+}
+
+// Closing keeps what you typed for next time; closing an empty box forgets it.
+function close() {
+  if (!state.prompt.text.trim()) {
+    clearDraft();
+    return quit(0);
   }
+  try {
+    saveDraft({ kind: agent().kind, prompt: state.prompt.text, destination: destination().id, cwd: state.cwd });
+  } catch { /* losing a draft is better than a modal that will not close */ }
   quit(0);
 }
 
