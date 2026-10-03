@@ -11,6 +11,7 @@ prompt.
   supports is behind `ctrl+k`.
 - **New tab, a split, a whole new workspace, or a git worktree** — `ctrl+t` to
   choose, and `ctrl+d` to start it somewhere other than where you are.
+- **Model and effort per launch** for Claude Code and Codex, behind `ctrl+o`.
 - **The prompt lands before the TUI paints.** Agents whose CLI takes a prompt as
   an argument get it at launch instead of being typed into.
 - **Pasting works** — bracketed paste, unmarked bursts, and `ctrl+v` reading your
@@ -88,6 +89,7 @@ press `enter`.
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1`…`alt+9` | jump straight to a numbered agent |
 | `ctrl+k` | the full agent list, filterable by typing |
+| `ctrl+o` | model and effort for this launch (Claude Code and Codex) |
 | `ctrl+t` | destination: new tab → split right → split down → new workspace → new worktree |
 | `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
 | `ctrl+p` | presets, filterable by typing; choosing the active one removes it |
@@ -152,6 +154,14 @@ between words and cut to 40 characters. "Fix the login bug" becomes
 against the ones installed here:
 
 ![The full agent list, with installed agents marked](docs/quick-prompt-agents.png)
+
+`ctrl+o` picks the model and reasoning effort for the selected agent:
+`↑`/`↓` for the model, `←`/`→` for the effort. The choice shows on the
+destination row, and each agent remembers its own. "default" leaves it to the
+agent's own config. Only Claude Code (`--model`, `--effort`) and Codex (`-m`,
+`-c model_reasoning_effort=…`) have it so far. Their flags come from each CLI's
+own `--help`, and the model lists are fixed in `lib/models.js`, so a new model
+needs a line there.
 
 Pasting works whether or not your terminal supports it. A paste arrives as a
 burst of keypresses where a newline would otherwise mean "launch" and a tab
@@ -241,7 +251,7 @@ The worker delivers the prompt one of two ways. Agents whose CLI takes a prompt
 as a launch argument get it that way:
 
 ```bash
-herdr agent start qp-claude --kind claude --pane <p> -- "refactor the auth module"
+herdr agent start qp-claude --kind claude --pane <p> -- --model opus "refactor the auth module"
 ```
 
 The agent has the prompt before its TUI paints, which is both faster and immune
@@ -249,12 +259,15 @@ to a startup repaint eating the keystrokes. Everything else falls back to typing
 into the TUI: wait for `interactive_ready`, send, then confirm the text actually
 landed before retrying. Failures surface as a Herdr notification.
 
+A model and effort from `ctrl+o` are launch arguments either way, ahead of the
+prompt when there is one.
+
 Set `QUICK_PROMPT_NO_INLINE=1` to force the keystroke path, for comparing the two
 when an agent misbehaves with a launch argument.
 
 The agent list is read from `herdr agent start --help` at runtime, so new agent
-kinds appear as soon as Herdr supports them. Your recent agents and last
-destination live in `HERDR_PLUGIN_STATE_DIR`, and so does `history.json`: your
+kinds appear as soon as Herdr supports them. Your recent agents, last
+destination, and each agent's model live in `HERDR_PLUGIN_STATE_DIR`, and so does `history.json`: your
 last 50 launched prompts, stored as plain text so that `↑` can recall them.
 Delete the file to forget them.
 

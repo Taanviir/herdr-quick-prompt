@@ -8,6 +8,7 @@ const { finishRequest } = require("../lib/state");
 const { run: herdrRun, notify, HerdrError } = require("../lib/herdr");
 const { createTiming } = require("../lib/timing");
 const { supportsInlinePrompt } = require("../lib/agents");
+const { modelArgs } = require("../lib/models");
 const { composePrompt } = require("../lib/presets");
 const { branchName, uniqueBranch } = require("../lib/worktree");
 
@@ -124,11 +125,12 @@ function createTarget(request) {
 // A freshly created tab may not be at its interactive prompt yet, and
 // `agent start` requires that, so retry briefly before giving up.
 //
-// `inline` is passed through to the agent's own CLI after `--`, which hands the
-// agent its prompt before its TUI even paints.
-function startAgent(name, kind, pane, inline) {
+// `agentArgs` are passed through to the agent's own CLI after `--`. An inline
+// prompt goes last among them, which hands the agent its prompt before its TUI
+// even paints.
+function startAgent(name, kind, pane, agentArgs) {
   const args = ["agent", "start", name, "--kind", kind, "--pane", pane];
-  if (inline) args.push("--", inline);
+  if (agentArgs.length > 0) args.push("--", ...agentArgs);
 
   let last = "agent did not start";
 
@@ -166,14 +168,15 @@ function main() {
   // Herdr refuses a launch argument with a newline in it, so multiline prompts
   // are typed in instead.
   const inline = prompt && !prompt.includes("\n") && supportsInlinePrompt(kind) ? prompt : null;
+  const options = modelArgs(kind, request);
   let delivered = Boolean(inline);
-  let started = startAgent(name, kind, pane, inline);
+  let started = startAgent(name, kind, pane, inline ? [...options, inline] : options);
 
-  // The agent rejected our launch arguments rather than failing to start; try
-  // again bare and fall back to typing the prompt in.
+  // The agent rejected the inline prompt rather than failing to start; try
+  // again without it and fall back to typing the prompt in.
   if (!started.started && inline) {
     delivered = false;
-    started = startAgent(name, kind, pane, null);
+    started = startAgent(name, kind, pane, options);
   }
   if (!started.started) throw new HerdrError(started.message);
 
