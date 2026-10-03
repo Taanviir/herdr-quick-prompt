@@ -31,7 +31,7 @@ testing the published copy.
 | `bin/open.js` | Resolves the caller's location and opens the popup |
 | `bin/setup.js` | Writes the keybinding into the user's `config.toml` |
 | `bin/picker.js` | The modal TUI: rendering, keys, paste |
-| `bin/launch.js` | Detached worker: creates the tab or split, starts the agent, delivers the prompt |
+| `bin/launch.js` | Detached worker: creates the tab, split, workspace or worktree, starts the agent, delivers the prompt |
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
 | `lib/agents.js` | Agent catalog, `PATH` detection, which kinds take an inline prompt, the agent running in a pane |
 | `lib/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
@@ -41,6 +41,7 @@ testing the published copy.
 | `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
 | `lib/dropped.js` | Copying dropped files that would not survive until the agent reads them |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
+| `lib/worktree.js` | Branch names for the worktree destination, and the git repository check |
 | `lib/state.js` | Preferences, prompt history, launch requests and the draft under `HERDR_PLUGIN_STATE_DIR` |
 
 ## Things that will bite you
