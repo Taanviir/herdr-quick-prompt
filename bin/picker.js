@@ -14,8 +14,9 @@ const { StringDecoder } = require("node:string_decoder");
 
 const { catalog } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
+const { History } = require("../lib/history");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, writeRequest, readFailedRequest, discardRequest, sweepStaleRequests } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, readFailedRequest, discardRequest, sweepStaleRequests } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
@@ -73,6 +74,7 @@ const state = {
   agent: Math.max(0, agents.findIndex((a) => a.kind === (recovered?.request.kind ?? prefs.recents[0]))),
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (recovered?.request.destination ?? prefs.destination))),
   prompt: new Editor(recovered?.request.prompt ?? ""),
+  history: new History(readHistory()),
   cwd: recovered?.request.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   overlay: null, // { type: "agents" | "dirs", ... } while a picker is open
   notice: recovered ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear" : null,
@@ -483,11 +485,13 @@ function onMainKey(chunk, key) {
   state.notice = null;
 
   switch (true) {
+    // Up and down walk the prompt's own lines first and history only past its
+    // top and bottom, so a multi-line prompt stays editable.
     case key.name === "up":
-      prompt.moveVertical(-1, content() - 2);
+      if (!prompt.moveVertical(-1, content() - 2)) recall(state.history.older(prompt.text));
       break;
     case key.name === "down":
-      prompt.moveVertical(1, content() - 2);
+      if (!prompt.moveVertical(1, content() - 2)) recall(state.history.newer());
       break;
     case key.name === "escape":
       return quit(0);
@@ -532,6 +536,10 @@ function onMainKey(chunk, key) {
       if (!editKey(prompt, chunk, key)) return;
   }
   scheduleRender();
+}
+
+function recall(text) {
+  if (text !== null) state.prompt = new Editor(text);
 }
 
 // Plain \r launches. \n is ctrl+j, or shift+enter and ctrl+enter as
@@ -640,6 +648,7 @@ function launch() {
   if (!chosen) return quit(0);
 
   remember(chosen.kind, destination().id, state.cwd);
+  recordPrompt(state.prompt.text);
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
