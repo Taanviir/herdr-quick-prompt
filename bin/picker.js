@@ -389,7 +389,10 @@ function onRunningKey(chunk, key) {
   state.overlay.error = null;
 
   switch (true) {
-    case key.name === "escape" || (key.ctrl && key.name === "r"):
+    case key.name === "escape":
+      escapeOverlay();
+      break;
+    case key.ctrl && key.name === "r":
       state.overlay = null;
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
@@ -506,7 +509,7 @@ function onModelKey(chunk, key) {
 
   switch (true) {
     case key.name === "escape" || (key.ctrl && key.name === "o"):
-      state.overlay = null;
+      escapeOverlay();
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
       moveModel(-1);
@@ -619,9 +622,12 @@ function onPresetsKey(chunk, key) {
 
   switch (true) {
     case key.name === "escape":
+      escapeOverlay();
+      break;
+    case key.ctrl && key.name === "p":
       state.overlay = null;
       break;
-    case key.name === "up" || (key.ctrl && key.name === "p"):
+    case key.name === "up":
       state.overlay.index = Math.max(0, Math.min(state.overlay.index, list.length - 1) - 1);
       break;
     case key.name === "down" || (key.ctrl && key.name === "n"):
@@ -730,6 +736,9 @@ function onDirsKey(chunk, key) {
 
   switch (true) {
     case key.name === "escape":
+      escapeOverlay();
+      break;
+    case key.ctrl && key.name === "d":
       state.overlay = null;
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
@@ -846,10 +855,26 @@ async function pasteFromClipboard() {
 
 function onEscape() {
   if (state.overlay) {
-    state.overlay = null;
+    escapeOverlay();
     return scheduleRender();
   }
   back();
+}
+
+// A filter goes before the list does, so a mistyped one costs a single esc
+// rather than the list and the place in it.
+function escapeOverlay() {
+  const overlay = state.overlay;
+  if (overlay.filter) {
+    overlay.filter = "";
+    overlay.index = 0;
+  } else if (overlay.input?.text) {
+    overlay.input = new Editor();
+    overlay.index = 0;
+    overlay.selectionMoved = false;
+  } else {
+    state.overlay = null;
+  }
 }
 
 // Out of a follow-up and back to launching, or out of the picker altogether.
@@ -1056,7 +1081,10 @@ function onAgentsKey(chunk, key) {
   const list = overlayMatches();
 
   switch (true) {
-    case key.name === "escape" || (key.ctrl && key.name === "k"):
+    case key.name === "escape":
+      escapeOverlay();
+      break;
+    case key.ctrl && key.name === "k":
       state.overlay = null;
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
