@@ -2,6 +2,7 @@
 
 // Detached worker: create the tab, start the agent in it, deliver the prompt.
 // Runs after the popup has closed so the modal never blocks on agent startup.
+// A follow-up skips all of that and prompts an agent that is already running.
 
 const fs = require("node:fs");
 const { finishRequest } = require("../lib/state");
@@ -18,6 +19,7 @@ const READY_POLLS = 40;
 // sent into that repaint are lost.
 const SETTLE_MS = 900;
 const DELIVERY_ATTEMPTS = 3;
+const FOLLOW_UP_TIMEOUT_MS = 20000;
 let timing;
 
 function run(args, options) {
@@ -139,6 +141,7 @@ function main() {
 
   const request = readRequest(file);
   timing = createTiming(request);
+  if (request.followUp) return followUp(request.followUp, request.prompt);
   const { kind, prompt } = request;
 
   const name = uniqueName(kind);
@@ -182,6 +185,20 @@ function main() {
     return false;
   }
   return true;
+}
+
+// The agent is past its startup repaint, so the keystrokes are not at risk the
+// way they are for a fresh one. Herdr confirms the prompt landed by seeing the
+// agent start working on it.
+function followUp({ target, title }, prompt) {
+  const sent = run([
+    "agent", "prompt", target, prompt,
+    "--wait", "--until", "working", "--until", "blocked", "--timeout", String(FOLLOW_UP_TIMEOUT_MS),
+  ], { check: false });
+  if (sent.ok) return true;
+
+  notify("Quick Prompt", `${title} did not take the follow-up: ${sent.message}. Reopen Quick Prompt to recover your draft.`);
+  return false;
 }
 
 function agentState(name) {

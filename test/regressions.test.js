@@ -419,3 +419,69 @@ test("kitty protocol keys come back as the legacy bytes readline knows", () => {
   assert.equal(legacyKeys("\x1b[9;2u"), "\x1b[Z");
   assert.equal(legacyKeys("a\x1b[1;5Db"), "a\x1b[1;5Db");
 });
+
+const LISTED = [
+  { agent: "claude", agent_status: "working", pane_id: "w1:p1", cwd: "/work/api", terminal_title_stripped: "Refactor auth", state_change_seq: 9 },
+  { agent: "codex", agent_status: "idle", pane_id: "w1:p2", cwd: "/work/web", terminal_title_stripped: "Fix the build", state_change_seq: 3 },
+  { agent: "claude", agent_status: "blocked", pane_id: "w1:p3", cwd: "/work/api", terminal_title_stripped: "Trust dialog", state_change_seq: 12 },
+  { agent: "gemini", agent_status: "done", pane_id: "w2:p1", foreground_cwd: "/work/docs/site", cwd: "/work/docs", terminal_title_stripped: "", state_change_seq: 7 },
+  { agent: "pi", pane_id: "w2:p2", cwd: "/work/misc", state_change_seq: 1 },
+  { agent: "claude", agent_status: "idle", cwd: "/nowhere" },
+];
+
+test("running agents waiting on you come first, newest change first, blocked ones last", () => {
+  const { parseAgents } = require("../lib/running");
+  const parsed = parseAgents({ agents: LISTED });
+  assert.deepEqual(parsed.map((entry) => entry.target), ["w2:p1", "w1:p2", "w1:p1", "w2:p2", "w1:p3"],
+    "an agent without a pane cannot be prompted and is left out");
+  assert.deepEqual(parsed[0], {
+    target: "w2:p1", title: "gemini", kind: "gemini", status: "done", cwd: "/work/docs/site", changed: 7,
+  }, "an untitled agent goes by its kind, and by the directory it is working in");
+  assert.equal(parsed[3].status, "unknown");
+  assert.deepEqual(parseAgents({}), []);
+  assert.deepEqual(parseAgents(undefined), []);
+});
+
+test("the running list filters on title, kind and directory", () => {
+  const { parseAgents, matches } = require("../lib/running");
+  const parsed = parseAgents({ agents: LISTED });
+  const filtered = (text) => parsed.filter((entry) => matches(entry, text)).map((entry) => entry.target);
+  assert.deepEqual(filtered("AUTH"), ["w1:p1"]);
+  assert.deepEqual(filtered("codex"), ["w1:p2"]);
+  assert.deepEqual(filtered("docs/site"), ["w2:p1"]);
+  assert.deepEqual(filtered(""), parsed.map((entry) => entry.target));
+});
+
+test("the worker sends a follow-up to the running agent without starting anything", () => {
+  for (const ok of [true, false]) {
+    const calls = [];
+    const finished = [];
+    const notifications = [];
+    const launcher = load("bin/launch.js", {
+      "node:fs": { readFileSync: () => JSON.stringify({
+        kind: "codex", prompt: "one\ntwo", destination: "follow-up",
+        followUp: { target: "w1:p2", title: "Fix the build", kind: "codex", cwd: "/work/web" },
+      }) },
+      "../lib/state": { finishRequest: (file, success) => finished.push(success) },
+      "../lib/timing": { createTiming: () => null },
+      "../lib/herdr": {
+        HerdrError: Error,
+        notify: (...args) => notifications.push(args),
+        run: (args) => {
+          calls.push(args);
+          return ok ? { ok: true, result: {} } : { ok: false, code: "agent_blocked", message: "agent is blocked" };
+        },
+      },
+    }, "try {\n  const success = main();");
+    launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+    launcher.context.process.exit = () => {};
+    const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
+    launcher.evaluate(source.slice(source.indexOf("try {\n  const success = main();")));
+
+    assert.equal(calls.length, 1, "no tab, no agent start, no list");
+    assert.deepEqual([...calls[0].slice(0, 4)], ["agent", "prompt", "w1:p2", "one\ntwo"]);
+    assert.ok(calls[0].includes("--wait"));
+    assert.deepEqual(finished, [ok]);
+    if (!ok) assert.match(notifications[0][1], /Fix the build.*agent is blocked.*recover your draft/);
+  }
+});
