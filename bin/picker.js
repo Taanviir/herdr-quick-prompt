@@ -611,10 +611,18 @@ function openDirectories() {
 
 // Empty: where you are, where you have been, and the neighbours of where you
 // are — usually the other project in the same folder. Typing filters that,
-// unless it looks like a path, in which case it completes one.
+// unless it looks like a path, in which case it completes one. Both read the
+// disk, so the list is kept until the text changes rather than redone per key.
 function directoryEntries() {
-  const text = state.overlay.input.text.trim();
-  const known = () => suggestions(state.cwd, prefs.directories);
+  const overlay = state.overlay;
+  const text = overlay.input.text.trim();
+  const key = `${state.cwd}\0${text}`;
+  if (overlay.listed?.key !== key) overlay.listed = { key, entries: listDirectories(overlay, text) };
+  return overlay.listed.entries;
+}
+
+function listDirectories(overlay, text) {
+  const known = () => (overlay.known ??= suggestions(state.cwd, prefs.directories));
 
   if (!text) return known();
   if (text.startsWith("/") || text.startsWith("~")) return complete(text);

@@ -200,7 +200,7 @@ function stateIn(prefix) {
 // The picker over a state directory of its own, starting from `draft` when
 // given. `ui.state` reads and writes that directory as the picker does.
 function picker(draft = null, {
-  running = null, runningList = [], requests = [], recents = [], history = [], presets = [],
+  running = null, runningList = [], requests = [], recents = [], history = [], presets = [], dirs = {},
   installed = ["claude", "codex", "copilot", "cursor", "gemini"], prefs = { recents },
   env = {}, scratchpad = { available: () => false, save: () => ({ ok: true, message: "" }) },
 } = {}) {
@@ -234,6 +234,7 @@ function picker(draft = null, {
       isDirectory: (value) => ["/tmp/", "/tmp/child"].includes(value),
       complete: () => ["/tmp/child"],
       suggestions: () => [],
+      ...dirs,
     },
     "../lib/worktree": { insideRepo: (dir) => dir === "/repo" },
   }, "/* ---------- boot ---------- */", { ...(running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {}), ...env });
@@ -692,6 +693,39 @@ test("directory arrows override typed parent, while direct Enter uses the typed 
   ui.evaluate(open);
   ui.evaluate("onDirsKey('', {name: 'down'}); insertPasted('child')");
   assert.equal(ui.evaluate("state.overlay.selectionMoved"), false);
+});
+
+test("the directory list is read once per edit, not once per key or frame", () => {
+  const listed = [];
+  const ui = picker(null, { dirs: {
+    suggestions: () => { listed.push("suggestions"); return ["/tmp", "/tmp/a", "/tmp/b"]; },
+    complete: (text) => { listed.push(`complete ${text}`); return ["/usr/bin"]; },
+  } });
+  ui.evaluate("openDirectories()");
+  ui.evaluate("dirsBody(71, 16); onDirsKey('', {name: 'down'}); dirsBody(71, 16); onDirsKey('', {name: 'down'}); dirsBody(71, 16)");
+  assert.deepEqual(listed, ["suggestions"]);
+  ui.evaluate("onDirsKey('a', {name: 'a'}); dirsBody(71, 16); onDirsKey('', {name: 'up'}); dirsBody(71, 16)");
+  assert.deepEqual(listed, ["suggestions"], "filtering reuses the suggestions it already has");
+  assert.deepEqual([...ui.evaluate("directoryEntries()")], ["/tmp/a"]);
+  ui.evaluate("onDirsKey('', {ctrl: true, name: 'u'}); onDirsKey('/', {name: '/'}); dirsBody(71, 16); onDirsKey('', {name: 'down'})");
+  assert.deepEqual(listed, ["suggestions", "complete /"]);
+});
+
+test("directory suggestions only check the remembered directories, not every neighbour", () => {
+  const root = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-dirs-"));
+  scratch.push(root);
+  for (const name of ["here", "other", "third", ".hidden"]) fs.mkdirSync(path.join(root, name));
+  fs.writeFileSync(path.join(root, "file.txt"), "");
+  const statted = [];
+  const realFs = require("node:fs");
+  const dirs = load("lib/dirs.js", {
+    "node:fs": { ...realFs, statSync: (target) => { statted.push(target); return realFs.statSync(target); } },
+  }).context.module.exports;
+  const here = path.join(root, "here");
+  const gone = path.join(root, "gone");
+  assert.deepEqual([...dirs.suggestions(here, [gone, path.join(root, "third")])],
+    [here, path.join(root, "third"), path.join(root, "other")]);
+  assert.deepEqual(statted, [here, gone, path.join(root, "third")]);
 });
 
 test("setup detects both TOML quote styles and treats punctuation literally", () => {
