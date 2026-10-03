@@ -845,6 +845,21 @@ test("setup writes both bindings into the config file Herdr names, once", () => 
   assert.equal(fs.readFileSync(config, "utf8"), written);
 });
 
+test("ctrl+y puts back what ctrl+u cleared, at the cursor", () => {
+  const ui = picker();
+  ui.evaluate("state.prompt = new Editor('fix the login bug'); onMainKey('', {ctrl: true, name: 'u'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "");
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'u'})");
+  ui.evaluate("state.prompt = new Editor('please '); onMainKey('', {ctrl: true, name: 'y'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "please fix the login bug", "clearing an empty box keeps the earlier text");
+
+  const restored = picker({ kind: "codex", prompt: "lost work" });
+  restored.evaluate("onMainKey('', {ctrl: true, name: 'u'})");
+  assert.match(restored.evaluate("state.notice"), /ctrl\+y brings it back/);
+  restored.evaluate("onMainKey('', {ctrl: true, name: 'y'})");
+  assert.equal(restored.evaluate("state.prompt.text"), "lost work");
+});
+
 test("clearing a restored draft throws it away instead of emptying the buffer", () => {
   const ui = picker({ kind: "codex", prompt: "lost work", failed: true });
 
