@@ -373,6 +373,31 @@ test("vertical navigation keeps a preferred column through short and wrapped lin
   assert.equal(ui.evaluate("state.prompt.cursor"), 3);
 });
 
+test("the prompt is wrapped once per edit and width, and the caret still follows the cursor", () => {
+  const { Editor } = require("../lib/editor");
+  const editor = new Editor("abcdefghij");
+  let wraps = 0;
+  const wrap = editor.wrap.bind(editor);
+  editor.wrap = (width) => { wraps += 1; return wrap(width); };
+
+  editor.moveVertical(-1, 4);
+  assert.deepEqual(editor.layout(4).caret, { row: 1, col: 2 });
+  editor.move(-1);
+  assert.deepEqual(editor.layout(4).caret, { row: 1, col: 1 });
+  assert.equal(wraps, 1, "moving the cursor reuses the wrapping");
+
+  editor.layout(5);
+  assert.equal(wraps, 2, "a new width wraps again");
+  for (const edit of ["insert('x')", "backspace()", "deleteForward()", "deleteWord()", "deleteWordForward()", "clear()"]) {
+    editor.insert("one two");
+    editor.layout(5);
+    const before = wraps;
+    new Function("editor", `editor.${edit}`)(editor);
+    assert.deepEqual(editor.layout(5).rows, new Editor(editor.text).layout(5).rows, edit);
+    assert.equal(wraps, before + 1, edit);
+  }
+});
+
 test("state files are replaced whole, never rewritten in place", (t) => {
   const { dir, api } = stateIn("qp-atomic-test-");
   api.recordPrompt("first");
