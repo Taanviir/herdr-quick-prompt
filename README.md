@@ -67,7 +67,9 @@ and end of the line.
 
 **Agents.** The numbered chips are the agents installed on this machine. Their
 order never changes, so `alt+2` always means the same agent. The last one you
-used starts selected. `ctrl+k` lists every kind Herdr supports:
+used starts selected. An agent that is not on your `PATH` is marked `○`, and
+Enter on one asks again before launching it. `ctrl+k` lists every kind Herdr
+supports:
 
 ![The full agent list, with installed agents marked](docs/quick-prompt-agents.png)
 
