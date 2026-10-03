@@ -12,6 +12,8 @@ prompt.
 - **New tab, a split, a whole new workspace, or a git worktree** — `ctrl+t` to
   choose, and `ctrl+d` to start it somewhere other than where you are.
 - **Model and effort per launch** for Claude Code and Codex, behind `ctrl+o`.
+- **Follow-ups.** `ctrl+r` sends the prompt to an agent that is already running
+  instead of starting a new one.
 - **The prompt lands before the TUI paints.** Agents whose CLI takes a prompt as
   an argument get it at launch instead of being typed into.
 - **Pasting works** — bracketed paste, unmarked bursts, and `ctrl+v` reading your
@@ -92,9 +94,10 @@ press `enter`.
 | `ctrl+o` | model and effort for this launch (Claude Code and Codex) |
 | `ctrl+t` | destination: new tab → split right → split down → new workspace → new worktree |
 | `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
+| `ctrl+r` | follow up: send the prompt to an agent that is already running |
 | `ctrl+p` | presets, filterable by typing; choosing the active one removes it |
 | `ctrl+x` | remove the preset |
-| `esc` | close, keeping what you typed |
+| `esc` | close, keeping what you typed; in a follow-up, back to launching |
 
 Editing keys work as you would expect, in the prompt and the directory field:
 
@@ -162,6 +165,13 @@ agent's own config. Only Claude Code (`--model`, `--effort`) and Codex (`-m`,
 `-c model_reasoning_effort=…`) have it so far. Their flags come from each CLI's
 own `--help`, and the model lists are fixed in `lib/models.js`, so a new model
 needs a line there.
+
+`ctrl+r` lists the agents already running in Herdr, filterable by title, kind,
+or directory. The ones waiting on you, idle or done, come first; blocked ones
+come last, since Herdr will not hand them a prompt. Pick one and the popup
+becomes a follow-up to it. The header names the agent, Enter sends the prompt
+there, and the agent, destination, and directory keys do nothing. `esc` goes
+back to launching a new agent, and `ctrl+r` picks a different one.
 
 Pasting works whether or not your terminal supports it. A paste arrives as a
 burst of keypresses where a newline would otherwise mean "launch" and a tab
@@ -258,6 +268,11 @@ The agent has the prompt before its TUI paints, which is both faster and immune
 to a startup repaint eating the keystrokes. Everything else falls back to typing
 into the TUI: wait for `interactive_ready`, send, then confirm the text actually
 landed before retrying. Failures surface as a Herdr notification.
+
+A follow-up goes through the same worker. The agent is already past its startup
+repaint, so it is a single `herdr agent prompt` that waits for the agent to
+start working; if it never does, or the agent is blocked, you get the same
+notification and the draft is kept.
 
 A model and effort from `ctrl+o` are launch arguments either way, ahead of the
 prompt when there is one.
