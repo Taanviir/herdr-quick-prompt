@@ -60,8 +60,9 @@ test("an agent busy with its inline prompt counts as started after readiness tim
   assert.equal(calls, 2);
 });
 
-function picker(recovered = null, discarded = []) {
+function picker(recovered = null, discarded = [], running = []) {
   return load("bin/picker.js", {
+    "../lib/running": { ...require("../lib/running"), runningAgents: () => running },
     "../lib/agents": { catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
       .map((kind) => ({ kind, installed: false })) },
     "../lib/state": {
@@ -450,6 +451,49 @@ test("the running list filters on title, kind and directory", () => {
   assert.deepEqual(filtered("codex"), ["w1:p2"]);
   assert.deepEqual(filtered("docs/site"), ["w2:p1"]);
   assert.deepEqual(filtered(""), parsed.map((entry) => entry.target));
+});
+
+test("a follow-up goes to the chosen agent, and esc backs out one step at a time", () => {
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(null, [], parseAgents({ agents: LISTED }));
+  ui.evaluate("dispatched = []; dispatch = (request) => dispatched.push(request)");
+
+  ui.evaluate("onMainKey('\\x12', {ctrl: true, name: 'r'})");
+  assert.equal(ui.evaluate("state.overlay.type"), "running");
+  assert.match(ui.evaluate("runningBody(71, 16).lines[1]"), /gemini · done/);
+  ui.evaluate("onListKey('', {name: 'escape'})");
+  assert.equal(ui.evaluate("state.overlay"), null, "esc in the list goes back to the prompt");
+  assert.equal(ui.evaluate("state.followUp"), null);
+
+  ui.evaluate("openRunning(); onListKey('f', {name: 'f'}); onListKey('i', {name: 'i'}); onListKey('x', {name: 'x'})");
+  ui.evaluate("onListKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("state.followUp.target"), "w1:p2");
+  assert.match(ui.evaluate("mainBody(71, 16).lines[1]"), /→.*Fix the build/);
+
+  const agentBefore = ui.evaluate("state.agent");
+  ui.evaluate("onMainKey('\\t', {name: 'tab'}); onMainKey('\\x14', {ctrl: true, name: 't'}); onMainKey('\\x0b', {ctrl: true, name: 'k'})");
+  assert.equal(ui.evaluate("state.agent"), agentBefore, "the agent is fixed in a follow-up");
+  assert.equal(ui.evaluate("destination().id"), "tab");
+  assert.equal(ui.evaluate("state.overlay"), null);
+
+  ui.evaluate("onMainKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("dispatched.length"), 0, "an empty follow-up is not sent");
+  ui.evaluate("state.prompt = new Editor('also update the tests'); onMainKey('\\r', {name: 'return'})");
+  const sent = ui.evaluate("dispatched[0]");
+  assert.equal(sent.prompt, "also update the tests");
+  assert.equal(sent.followUp.target, "w1:p2");
+  assert.equal(sent.workspace, undefined, "a follow-up creates nothing, so it has nowhere to go");
+
+  ui.evaluate("onMainKey('', {name: 'escape'})");
+  assert.equal(ui.evaluate("state.followUp"), null, "esc leaves follow-up mode before it closes the picker");
+});
+
+test("a recovered follow-up reopens aimed at the same agent", () => {
+  const followUp = { target: "w1:p2", title: "Fix the build", kind: "codex", cwd: "/work/web" };
+  const ui = picker({ file: "/tmp/failed-request-1-1.json", request: { kind: "codex", prompt: "again", followUp } });
+  assert.equal(ui.evaluate("state.followUp.target"), "w1:p2");
+  assert.match(ui.evaluate("state.notice"), /follow-up/);
+  assert.match(ui.evaluate("mainBody(71, 16).lines[1]"), /Fix the build.*codex/);
 });
 
 test("the worker sends a follow-up to the running agent without starting anything", () => {

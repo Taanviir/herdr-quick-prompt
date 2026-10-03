@@ -2,7 +2,8 @@
 
 // Popup entrypoint: one screen. The cursor starts in the prompt because that is
 // what you came here to write; the agent and the destination are one keystroke
-// away, and the agents you do not have installed stay behind ctrl+k.
+// away, and the agents you do not have installed stay behind ctrl+k. ctrl+r
+// turns it into a follow-up to an agent that is already running.
 //
 // Herdr draws the popup's border and title, so this renders bare inside it.
 
@@ -21,6 +22,7 @@ const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
 const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
+const { runningAgents, matches } = require("../lib/running");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
 
@@ -74,8 +76,11 @@ const state = {
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (recovered?.request.destination ?? prefs.destination))),
   prompt: new Editor(recovered?.request.prompt ?? ""),
   cwd: recovered?.request.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
-  overlay: null, // { type: "agents" | "dirs", ... } while a picker is open
-  notice: recovered ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear" : null,
+  followUp: recovered?.request.followUp ?? null, // the running agent Enter sends to, instead of launching
+  overlay: null, // { type: "agents" | "dirs" | "running", ... } while a picker is open
+  notice: recovered
+    ? `Recovered failed ${recovered.request.followUp ? "follow-up" : "launch"} · edit or Enter to retry · ctrl+u clear`
+    : null,
 };
 
 // Every cell inside the popup has to be written: cells this never paints show
@@ -114,9 +119,8 @@ function scheduleRender() {
 function render() {
   const inner = content();
   const rows = height();
-  const body = state.overlay
-    ? (state.overlay.type === "dirs" ? dirsBody(inner, rows) : agentsBody(inner, rows))
-    : mainBody(inner, rows);
+  const overlays = { agents: agentsBody, dirs: dirsBody, running: runningBody };
+  const body = state.overlay ? overlays[state.overlay.type](inner, rows) : mainBody(inner, rows);
 
   const painted = [];
   for (let row = 0; row < rows; row += 1) {
@@ -134,12 +138,12 @@ function render() {
 
 function mainBody(inner, rows) {
   const lines = new Array(rows).fill("");
-  lines[1] = chipRow(inner);
+  lines[1] = state.followUp ? followUpRow(inner) : chipRow(inner);
 
   const caret = promptBlock(lines, 3, Math.max(1, rows - 6), inner);
 
   lines[rows - 3] = style.dim("─".repeat(inner));
-  lines[rows - 2] = destinationRow(inner);
+  lines[rows - 2] = state.followUp ? followUpWhere(inner) : destinationRow(inner);
   lines[rows - 1] = state.notice ? style.warn(state.notice) : style.dim(hints());
   return { lines, caret };
 }
@@ -210,8 +214,60 @@ function destinationRow(inner) {
 }
 
 function hints() {
+  if (state.followUp) return "⏎ send · ctrl+r other agent · ctrl+v paste · \\⏎ newline · esc back";
   const verb = state.prompt.isEmpty ? "⏎ open agent" : "⏎ launch";
-  return `${verb} · tab agent · ctrl+v paste · \\⏎ newline · esc cancel`;
+  return `${verb} · tab agent · ctrl+r follow up · \\⏎ newline · esc cancel`;
+}
+
+/* ---------- follow-up to a running agent ---------- */
+
+function followUpRow(inner) {
+  const { title, kind, status } = state.followUp;
+  const tail = style.dim(status ? `${kind} · ${status}` : kind);
+  const name = truncate(title, Math.max(8, inner - displayWidth(tail) - 3));
+  const head = `${style.accent("→")} ${style.bright(name)}`;
+  return head + " ".repeat(Math.max(1, inner - displayWidth(head) - displayWidth(tail))) + tail;
+}
+
+function followUpWhere(inner) {
+  const where = shortenPath(state.followUp.cwd, Math.max(12, inner - 24));
+  return `${style.dim("→")} follow-up ${style.dim("(ctrl+r)")} ${style.dim("·")} ${where}`;
+}
+
+function openRunning() {
+  state.overlay = { type: "running", filter: "", index: 0, agents: runningAgents() };
+}
+
+function runningMatches() {
+  return state.overlay.agents.filter((entry) => matches(entry, state.overlay.filter));
+}
+
+function runningBody(inner, rows) {
+  const lines = new Array(rows).fill("");
+  const list = runningMatches();
+
+  lines[0] = state.overlay.filter
+    ? `${style.dim("running agent")}  ${style.accent(state.overlay.filter)}${style.dim("▏")}`
+    : style.dim("running agent");
+
+  if (list.length === 0) {
+    lines[1] = style.warn(state.overlay.agents.length ? "no running agent matches that filter" : "no agents are running");
+    lines[rows - 1] = style.dim("esc back");
+    return { lines, caret: null };
+  }
+
+  const room = rows - 2;
+  const active = Math.min(state.overlay.index, list.length - 1);
+  const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
+
+  list.slice(start, start + room).forEach((entry, index) => {
+    const detail = `${entry.kind} · ${entry.status} · ${shortenPath(entry.cwd, 20)} `;
+    const name = pad(truncate(` ${entry.title}`, inner - displayWidth(detail) - 2), inner - displayWidth(detail));
+    lines[1 + index] = start + index === active ? style.selected(name + detail) : name + style.dim(detail);
+  });
+
+  lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ follow up · esc back");
+  return { lines, caret: null };
 }
 
 /* ---------- the full agent list ---------- */
@@ -391,7 +447,7 @@ function onKey(chunk, key = {}) {
     return scheduleRender();
   }
   if (state.overlay) {
-    return state.overlay.type === "dirs" ? onDirsKey(chunk, key) : onAgentsKey(chunk, key);
+    return state.overlay.type === "dirs" ? onDirsKey(chunk, key) : onListKey(chunk, key);
   }
   return onMainKey(chunk, key);
 }
@@ -451,7 +507,14 @@ function onEscape() {
     state.overlay = null;
     return scheduleRender();
   }
-  quit(0);
+  back();
+}
+
+// Out of a follow-up and back to launching, or out of the picker altogether.
+function back() {
+  if (!state.followUp) return quit(0);
+  state.followUp = null;
+  scheduleRender();
 }
 
 function insertPasted(text) {
@@ -490,7 +553,10 @@ function onMainKey(chunk, key) {
       prompt.moveVertical(1, content() - 2);
       break;
     case key.name === "escape":
-      return quit(0);
+      return back();
+    // A running agent already has its kind, its place and its directory.
+    case Boolean(state.followUp) && launchControl(key):
+      return;
     case isNewline(chunk, key):
       prompt.insert("\n");
       break;
@@ -512,6 +578,9 @@ function onMainKey(chunk, key) {
     case key.ctrl && key.name === "d":
       openDirectories();
       break;
+    case key.ctrl && key.name === "r":
+      openRunning();
+      break;
     case key.ctrl && key.name === "t":
       state.destination = (state.destination + 1) % DESTINATIONS.length;
       break;
@@ -532,6 +601,12 @@ function onMainKey(chunk, key) {
       if (!editKey(prompt, chunk, key)) return;
   }
   scheduleRender();
+}
+
+function launchControl(key) {
+  return key.name === "tab"
+    || (key.ctrl && ["k", "t", "d"].includes(key.name))
+    || (key.meta && /^[1-9]$/.test(key.name ?? ""));
 }
 
 // Plain \r launches. \n is ctrl+j, or shift+enter and ctrl+enter as
@@ -590,11 +665,14 @@ function editKey(editor, chunk, key) {
   return true;
 }
 
-function onAgentsKey(chunk, key) {
-  const list = overlayMatches();
+// The agent kinds behind ctrl+k and the running agents behind ctrl+r: both a
+// filterable list, closed by the key that opened it.
+function onListKey(chunk, key) {
+  const running = state.overlay.type === "running";
+  const list = running ? runningMatches() : overlayMatches();
 
   switch (true) {
-    case key.name === "escape" || (key.ctrl && key.name === "k"):
+    case key.name === "escape" || (key.ctrl && key.name === (running ? "r" : "k")):
       state.overlay = null;
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
@@ -605,7 +683,8 @@ function onAgentsKey(chunk, key) {
       break;
     case key.name === "return" || key.name === "enter": {
       const chosen = list[Math.min(state.overlay.index, list.length - 1)];
-      if (chosen) state.agent = agents.indexOf(chosen);
+      if (chosen && running) state.followUp = chosen;
+      else if (chosen) state.agent = agents.indexOf(chosen);
       state.overlay = null;
       break;
     }
@@ -636,11 +715,13 @@ function isPrintable(chunk, key) {
 /* ---------- launch ---------- */
 
 function launch() {
+  if (state.followUp) return sendFollowUp();
+
   const chosen = agent();
   if (!chosen) return quit(0);
 
   remember(chosen.kind, destination().id, state.cwd);
-  const request = writeRequest({
+  dispatch({
     submittedAt: Date.now(),
     kind: chosen.kind,
     prompt: state.prompt.text.trim(),
@@ -649,7 +730,27 @@ function launch() {
     workspace,
     pane: originPane,
   });
+}
 
+// A running agent is already at its prompt, so an empty one has nothing to do.
+function sendFollowUp() {
+  const prompt = state.prompt.text.trim();
+  if (!prompt) {
+    state.notice = "type a follow-up to send";
+    return scheduleRender();
+  }
+  const { target, title, kind, cwd } = state.followUp;
+  dispatch({
+    submittedAt: Date.now(),
+    kind,
+    prompt,
+    destination: "follow-up",
+    followUp: { target, title, kind, cwd },
+  });
+}
+
+function dispatch(fields) {
+  const request = writeRequest(fields);
   spawnDetached(process.execPath, [LAUNCHER, request]);
   if (recoveredFile) {
     discardRequest(recoveredFile);
