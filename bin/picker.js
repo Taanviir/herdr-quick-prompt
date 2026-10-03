@@ -767,10 +767,7 @@ function onKey(chunk, key = {}) {
   if (swallow) return;
 
   if (key.ctrl && key.name === "c") return quit(0);
-  if (key.ctrl && key.name === "v") {
-    pasteFromClipboard();
-    return scheduleRender();
-  }
+  if (key.ctrl && key.name === "v") return pasteFromClipboard();
   if (state.overlay) return OVERLAYS[state.overlay.type].key(chunk, key);
   return onMainKey(chunk, key);
 }
@@ -807,24 +804,25 @@ function onData(chunk) {
   return false;
 }
 
-// Reading the clipboard can block for a second on WSL, so say what is happening
-// before going to fetch it.
-function pasteFromClipboard() {
-  state.notice = "reading clipboard…";
-  render();
+// Reading the clipboard takes a quarter of a second or more on WSL. The popup
+// keeps taking keys meanwhile, and the text lands wherever the cursor is then.
+const PASTING = "pasting…";
+let pasting = false;
 
-  const text = readClipboard();
-  state.notice = null;
+async function pasteFromClipboard() {
+  if (pasting) return;
+  pasting = true;
+  state.notice = PASTING;
+  scheduleRender();
 
-  if (text === null) {
-    state.notice = "no clipboard tool found — install xclip, xsel or wl-clipboard";
-    return;
-  }
-  if (!text) {
-    state.notice = "clipboard is empty";
-    return;
-  }
-  insertPasted(text);
+  const text = await readClipboard();
+  pasting = false;
+  if (state.notice === PASTING) state.notice = null;
+
+  if (text === null) state.notice = "no clipboard tool found — install xclip, xsel or wl-clipboard";
+  else if (!text) state.notice = "clipboard is empty";
+  else insertPasted(text);
+  scheduleRender();
 }
 
 function onEscape() {

@@ -200,7 +200,7 @@ function stateIn(prefix) {
 // The picker over a state directory of its own, starting from `draft` when
 // given. `ui.state` reads and writes that directory as the picker does.
 function picker(draft = null, {
-  running = null, runningList = [], requests = [], recents = [], history = [], presets = [], dirs = {},
+  running = null, runningList = [], requests = [], recents = [], history = [], presets = [], dirs = {}, clipboard = async () => null,
   installed = ["claude", "codex", "copilot", "cursor", "gemini"], prefs = { recents },
   env = {}, scratchpad = { available: () => false, save: () => ({ ok: true, message: "" }) },
 } = {}) {
@@ -238,6 +238,7 @@ function picker(draft = null, {
       ...dirs,
     },
     "../lib/worktree": { insideRepo: (dir) => dir === "/repo" },
+    "../lib/clipboard": { readClipboard: () => clipboard() },
   }, "/* ---------- boot ---------- */", { ...(running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {}), ...env });
   ui.evaluate("quit = () => {}");
   return Object.assign(ui, { dir, state: api, drafts: () => api.readDraft()?.draft ?? null });
@@ -1263,6 +1264,56 @@ test("PATH is swept once per directory however often it repeats", () => {
   assert.deepEqual([...found].sort(), ["codex", "powershell", "wsl"]);
   assert.equal(executables.onPath("powershell.exe"), true);
   assert.equal(executables.onPath("xclip"), false);
+});
+
+test("ctrl+v tries the reader that worked last, Windows' first under bare WSL, and none not on PATH", async () => {
+  const cache = {};
+  const tried = [];
+  const clipboard = (PATH, env, working) => load("lib/clipboard.js", {
+    "./executables": { onPath: (command) => (PATH ? PATH.includes(command) : null) },
+    "./state": { readCache: (name) => cache[name] ?? null, writeCache: (name, value) => { cache[name] = value; } },
+    "node:child_process": {
+      execFile: (command, _, __, done) => {
+        tried.push(command);
+        if (command === working) done(null, "copied\r\n");
+        else done(Object.assign(new Error(`spawn ${command} ENOENT`), { code: "ENOENT" }));
+        return { stdin: { end() {} } };
+      },
+    },
+  }, null, env).context.module.exports;
+  const order = (PATH, env, remembered) => [...clipboard(PATH, env).readers(env, remembered)].map((reader) => reader.command);
+
+  const desktop = { WAYLAND_DISPLAY: "wayland-0" };
+  const wsl = { WSL_DISTRO_NAME: "Ubuntu" };
+  assert.deepEqual(order(null, desktop), ["wl-paste", "xclip", "xsel", "pbpaste", "powershell.exe"]);
+  assert.deepEqual(order(null, wsl)[0], "powershell.exe");
+  assert.deepEqual(order(null, { ...wsl, DISPLAY: ":0" })[0], "wl-paste", "WSLg has a clipboard of its own");
+  assert.deepEqual(order(["xclip", "powershell.exe"], desktop), ["xclip", "powershell.exe"]);
+  assert.deepEqual(order(null, desktop, "xsel")[0], "xsel");
+
+  const reader = clipboard(null, desktop, "powershell.exe");
+  assert.equal(await reader.readClipboard(), "copied");
+  assert.deepEqual(tried, ["wl-paste", "xclip", "xsel", "pbpaste", "powershell.exe"]);
+  assert.deepEqual({ ...cache.clipboard }, { command: "powershell.exe" });
+  tried.length = 0;
+  assert.equal(await clipboard(null, desktop, "powershell.exe").readClipboard(), "copied");
+  assert.deepEqual(tried, ["powershell.exe"], "the next popup goes straight to it");
+  tried.length = 0;
+  assert.equal(await clipboard([], desktop, "xclip").readClipboard(), null);
+  assert.deepEqual(tried, [], "nothing on PATH, nothing spawned");
+});
+
+test("ctrl+v says it is pasting without freezing, and pastes at the cursor as it is then", async () => {
+  let deliver;
+  const ui = picker(null, { clipboard: () => new Promise((resolve) => { deliver = resolve; }) });
+  ui.evaluate("state.prompt = new Editor('ab')");
+  const pasted = ui.evaluate("onKey('\\x16', {ctrl: true, name: 'v'})");
+  assert.equal(ui.evaluate("state.notice"), "pasting…");
+  ui.evaluate("onKey('', {name: 'left'})");
+  deliver("XY");
+  await pasted;
+  assert.equal(ui.evaluate("state.prompt.text"), "aXYb");
+  assert.equal(ui.evaluate("state.notice"), null);
 });
 
 test("looking up the running agent is bounded and gives up quietly", async () => {
