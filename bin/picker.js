@@ -15,7 +15,7 @@ const { catalog, cachedCatalog, refreshCatalog, runningAgent } = require("../lib
 const { Editor } = require("../lib/editor");
 const { History } = require("../lib/history");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft, logCrash } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, rememberModel, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft, logCrash } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
@@ -510,6 +510,7 @@ function onModelKey(chunk, key) {
       break;
     case key.name === "return" || key.name === "enter":
       state.models[overlay.kind] = { model: models[overlay.index], effort: overlay.effort };
+      rememberModel(overlay.kind, state.models[overlay.kind]);
       state.overlay = null;
       break;
     default:
@@ -1101,7 +1102,7 @@ function launch(anyway = null) {
     return scheduleRender();
   }
 
-  remember(chosen.kind, destination().id, state.cwd, choice());
+  remember(chosen.kind, destination().id, state.cwd);
   recordPrompt(state.prompt.text);
   const request = writeRequest({
     submittedAt: Date.now(),

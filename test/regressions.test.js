@@ -408,7 +408,7 @@ test("state files are replaced whole, never rewritten in place", (t) => {
   api.recordPrompt("second");
   assert.notEqual(fs.statSync(file).ino, before, "a reader holding the old file still sees all of it");
   api.writeRequest({ kind: "codex", prompt: "x" });
-  api.remember("codex", "tab", "/tmp", null);
+  api.remember("codex", "tab", "/tmp");
   assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), []);
 });
 
@@ -1653,13 +1653,13 @@ test("the worker sends a follow-up to the running agent without starting anythin
 test("a workspace or worktree launch is not kept as the next popup's destination", () => {
   const { dir, api } = stateIn("qp-sticky-test-");
   const destination = () => JSON.parse(fs.readFileSync(path.join(dir, "prefs.json"), "utf8")).destination;
-  api.remember("codex", "right", "/tmp", null);
+  api.remember("codex", "right", "/tmp");
   assert.equal(destination(), "right");
-  api.remember("codex", "worktree", "/repo", null);
+  api.remember("codex", "worktree", "/repo");
   assert.equal(destination(), "right");
-  api.remember("codex", "workspace", "/tmp", null);
+  api.remember("codex", "workspace", "/tmp");
   assert.equal(destination(), "right");
-  api.remember("codex", "tab", "/tmp", null);
+  api.remember("codex", "tab", "/tmp");
   assert.equal(destination(), "tab");
 });
 
@@ -1668,4 +1668,13 @@ test("a remembered worktree outside a repository opens on a new tab", () => {
   assert.equal(picker(null, { prefs }).evaluate("destination().id"), "tab");
   const inRepo = picker({ kind: "claude", prompt: "x", destination: "worktree", cwd: "/repo" }, { prefs });
   assert.equal(inRepo.evaluate("destination().id"), "worktree", "a draft made in a repository keeps it");
+});
+
+test("a model picked with ctrl+o is kept even when the popup closes without launching", () => {
+  const ui = picker();
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex'); openModels()");
+  ui.evaluate("onModelKey('', {name: 'down'}); onModelKey('', {name: 'right'}); onModelKey('\\r', {name: 'return'}); onEscape()");
+  const saved = JSON.parse(fs.readFileSync(path.join(ui.dir, "prefs.json"), "utf8")).models.codex;
+  assert.deepEqual(saved, { model: "gpt-6.1-sol", effort: "low" });
+  assert.deepEqual({ ...picker(null, { prefs: { recents: ["codex"], models: { codex: saved } } }).evaluate("choice()") }, saved);
 });
