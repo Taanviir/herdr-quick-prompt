@@ -513,6 +513,46 @@ test("a multiline prompt is typed in, since Herdr refuses newlines in launch arg
   assert.deepEqual(delivered, ["one\ntwo"]);
 });
 
+test("a typed-in prompt waits for the agent to start on it, and only a stall is sent again", () => {
+  const deliver = (replies) => {
+    const calls = [];
+    const slept = [];
+    const launcher = load("bin/launch.js", {
+      "../lib/herdr": {
+        HerdrError: Error,
+        run: (args) => {
+          calls.push(args);
+          return replies.shift() ?? { ok: true, result: {} };
+        },
+      },
+    }, "try {\n  main();");
+    launcher.context.sleep = (ms) => slept.push(ms);
+    let error = null;
+    try {
+      launcher.evaluate('deliverPrompt("w1:p1", "gemini", "fix it")');
+    } catch (caught) {
+      error = caught;
+    }
+    return { calls, slept, error };
+  };
+
+  const landed = deliver([]);
+  assert.equal(landed.error, null);
+  assert.deepEqual(landed.calls.map((args) => args.join(" ")),
+    ["agent prompt w1:p1 fix it --wait --until working --until blocked --timeout 6000"]);
+  assert.ok(landed.slept.reduce((a, b) => a + b, 0) <= 300, "one short settle, not fixed waits around the prompt");
+
+  const stalled = { ok: false, code: "agent_prompt_stalled", message: "agent never started working" };
+  const retried = deliver([stalled]);
+  assert.equal(retried.error, null);
+  assert.equal(retried.calls.length, 2);
+
+  assert.match(deliver([stalled, stalled, stalled]).error.message, /gemini did not accept the prompt/);
+  const refused = deliver([{ ok: false, code: "agent_blocked", message: "agent is blocked" }]);
+  assert.match(refused.error.message, /could not send the prompt to gemini: agent is blocked/);
+  assert.equal(refused.calls.length, 1);
+});
+
 test("a launch argument Herdr cannot encode is not retried", () => {
   let calls = 0;
   const launcher = load("bin/launch.js", {
