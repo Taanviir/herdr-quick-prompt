@@ -23,6 +23,7 @@ const { readClipboard } = require("../lib/clipboard");
 const { stage } = require("../lib/dropped");
 const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
+const { modelsFor, effortsFor, normalize, modelLabel } = require("../lib/models");
 const { PRESETS, readPresets, composePrompt } = require("../lib/presets");
 const { insideRepo } = require("../lib/worktree");
 
@@ -95,7 +96,8 @@ const state = {
   history: new History(readHistory()),
   cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   preset: draft?.preset ?? null,
-  overlay: null, // { type: "agents" | "dirs" | "presets", ... } while a picker is open
+  models: draft ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
+  overlay: null, // { type: "agents" | "dirs" | "presets" | "model", ... } while a picker is open
   notice: draft?.failed ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear"
     : draft ? "Restored draft · ctrl+u clear" : null,
 };
@@ -108,6 +110,8 @@ const height = () => Math.max(8, out.rows ?? 12);
 const content = () => Math.max(28, width() - GUTTER * 2);
 const agent = () => agents[state.agent];
 const destination = () => DESTINATIONS[state.destination];
+// null for a kind with no model picker.
+const choice = () => (modelsFor(agent().kind) ? normalize(agent().kind, state.models[agent().kind]) : null);
 
 // The chip row is the agents you actually have, plus whatever is selected. The
 // other twenty kinds Herdr knows about are noise until you go looking (ctrl+k).
@@ -136,8 +140,7 @@ function scheduleRender() {
 function render() {
   const inner = content();
   const rows = height();
-  const overlays = { agents: agentsBody, dirs: dirsBody, presets: presetsBody };
-  const body = state.overlay ? overlays[state.overlay.type](inner, rows) : mainBody(inner, rows);
+  const body = state.overlay ? OVERLAYS[state.overlay.type].body(inner, rows) : mainBody(inner, rows);
 
   const painted = [];
   for (let row = 0; row < rows; row += 1) {
@@ -222,13 +225,23 @@ function promptBlock(lines, top, rows, inner) {
 }
 
 // The popup's title bar has no room for the working directory, so it rides along
-// with the destination: what will happen and where, each next to the key that
-// changes it.
+// with the destination: what will happen, with which model, and where, each next
+// to the key that changes it. A long model name gives up its key hint before the
+// path is squeezed below legibility.
 function destinationRow(inner) {
-  const what = `${destination().label} ${style.dim("(ctrl+t)")}`;
-  const fixed = destination().label.length + 9 + 14; // label, hint, arrow and joins
-  const where = shortenPath(state.cwd, Math.max(12, inner - fixed));
-  return `${style.dim("→")} ${what} ${style.dim("·")} ${where} ${style.dim("(ctrl+d)")}`;
+  const join = ` ${style.dim("·")} `;
+  const row = (model) => {
+    const parts = [`${destination().label} ${style.dim("(ctrl+t)")}`, model].filter(Boolean);
+    return `${style.dim("→")} ${parts.join(join)}${join}`;
+  };
+  const tail = ` ${style.dim("(ctrl+d)")}`;
+  const room = (head) => inner - displayWidth(head) - displayWidth(tail);
+
+  const label = choice() && modelLabel(choice());
+  let head = row(label && `${label} ${style.dim("(ctrl+o)")}`);
+  if (room(head) < 12) head = row(label);
+
+  return `${head}${shortenPath(state.cwd, Math.max(12, room(head)))}${tail}`;
 }
 
 function presetRow() {
@@ -274,6 +287,79 @@ function agentsBody(inner, rows) {
 
   lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ choose · esc back");
   return { lines, caret: null };
+}
+
+/* ---------- the model and effort ---------- */
+
+function openModels() {
+  const kind = agent().kind;
+  if (!modelsFor(kind)) {
+    state.notice = `no model choice for ${kind}`;
+    return;
+  }
+  const { model, effort } = choice();
+  state.overlay = { type: "model", kind, index: modelsFor(kind).indexOf(model), effort };
+}
+
+const optionName = (value) => value ?? "default";
+
+function modelBody(inner, rows) {
+  const lines = new Array(rows).fill("");
+  const { kind, index, effort } = state.overlay;
+  const models = modelsFor(kind);
+
+  lines[0] = style.dim("model") + " ".repeat(Math.max(1, inner - 5 - displayWidth(kind))) + style.dim(kind);
+
+  const room = Math.max(1, rows - 4);
+  const start = Math.max(0, Math.min(index - Math.floor(room / 2), models.length - room));
+  models.slice(start, start + room).forEach((model, offset) => {
+    const name = pad(optionName(model), Math.max(10, inner - 2));
+    lines[1 + offset] = start + offset === index ? style.selected(` ${name} `) : ` ${name} `;
+  });
+
+  const efforts = effortsFor(kind, models[index]).map((value) => (value === effort
+    ? style.selected(` ${optionName(value)} `)
+    : ` ${optionName(value)} `));
+  lines[rows - 2] = `${style.dim("effort")} ${efforts.join("")}`;
+  lines[rows - 1] = style.dim("↑↓ model · ←→ effort · ⏎ choose · esc back");
+  return { lines, caret: null };
+}
+
+function onModelKey(chunk, key) {
+  const overlay = state.overlay;
+  const models = modelsFor(overlay.kind);
+  const efforts = () => effortsFor(overlay.kind, models[overlay.index]);
+  const step = (list, value, by) => list[Math.max(0, Math.min(list.length - 1, list.indexOf(value) + by))];
+  const moveModel = (by) => {
+    overlay.index = models.indexOf(step(models, models[overlay.index], by));
+    // Not every model takes every effort.
+    if (!efforts().includes(overlay.effort)) overlay.effort = null;
+  };
+
+  switch (true) {
+    case key.name === "escape" || (key.ctrl && key.name === "o"):
+      state.overlay = null;
+      break;
+    case key.name === "up" || (key.ctrl && key.name === "p"):
+      moveModel(-1);
+      break;
+    case key.name === "down" || (key.ctrl && key.name === "n"):
+      moveModel(1);
+      break;
+    case key.name === "left":
+      overlay.effort = step(efforts(), overlay.effort, -1);
+      break;
+    case key.name === "right":
+      overlay.effort = step(efforts(), overlay.effort, 1);
+      break;
+    case key.name === "return" || key.name === "enter":
+      state.models[overlay.kind] = { model: models[overlay.index], effort: overlay.effort };
+      state.overlay = null;
+      break;
+    default:
+      return;
+  }
+  scheduleRender();
 }
 
 /* ---------- presets ---------- */
@@ -529,10 +615,7 @@ function onKey(chunk, key = {}) {
     pasteFromClipboard();
     return scheduleRender();
   }
-  if (state.overlay) {
-    const handlers = { agents: onAgentsKey, dirs: onDirsKey, presets: onPresetsKey };
-    return handlers[state.overlay.type](chunk, key);
-  }
+  if (state.overlay) return OVERLAYS[state.overlay.type].key(chunk, key);
   return onMainKey(chunk, key);
 }
 
@@ -597,6 +680,7 @@ function onEscape() {
 function insertPasted(text) {
   const clean = sanitizePasted(text);
   if (!clean) return;
+  if (state.overlay?.type === "model") return;
   if (state.overlay) {
     const flat = clean.replace(/\n/g, "");
     if (state.overlay.type === "dirs") {
@@ -655,6 +739,9 @@ function onMainKey(chunk, key) {
       break;
     case key.ctrl && key.name === "d":
       openDirectories();
+      break;
+    case key.ctrl && key.name === "o":
+      openModels();
       break;
     case key.ctrl && key.name === "p":
       openPresets();
@@ -794,6 +881,13 @@ function isPrintable(chunk, key) {
   return Boolean(chunk) && !key.ctrl && !key.meta && chunk >= " " && chunk !== "\x7f";
 }
 
+const OVERLAYS = {
+  agents: { body: agentsBody, key: onAgentsKey },
+  dirs: { body: dirsBody, key: onDirsKey },
+  model: { body: modelBody, key: onModelKey },
+  presets: { body: presetsBody, key: onPresetsKey },
+};
+
 /* ---------- launch ---------- */
 
 function launch() {
@@ -807,13 +901,14 @@ function launch() {
     return scheduleRender();
   }
 
-  remember(chosen.kind, destination().id, state.cwd);
+  remember(chosen.kind, destination().id, state.cwd, choice());
   recordPrompt(state.prompt.text);
   // Before the worker exists, so a failure it records is never wiped by this.
   clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
+    ...choice(),
     prompt: state.prompt.text.trim(),
     preset: state.preset,
     destination: destination().id,
@@ -833,7 +928,7 @@ function close() {
     return quit(0);
   }
   try {
-    saveDraft({ kind: agent().kind, prompt: state.prompt.text, preset: state.preset, destination: destination().id, cwd: state.cwd });
+    saveDraft({ kind: agent().kind, ...choice(), prompt: state.prompt.text, preset: state.preset, destination: destination().id, cwd: state.cwd });
   } catch { /* losing a draft is better than a modal that will not close */ }
   quit(0);
 }
