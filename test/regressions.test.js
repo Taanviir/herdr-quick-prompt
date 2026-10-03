@@ -1173,11 +1173,39 @@ test("a blocked agent is marked in the running list and cannot be chosen", () =>
 });
 
 test("a recovered follow-up reopens aimed at the same agent", () => {
+  const { parseAgents } = require("../lib/running");
   const followUp = { target: "w1:p2", title: "Fix the build", kind: "codex", cwd: "/work/web" };
-  const ui = picker({ kind: "codex", prompt: "again", followUp, failed: true });
+  const ui = picker({ kind: "codex", prompt: "again", followUp, failed: true }, { runningList: parseAgents({ agents: LISTED }) });
   assert.equal(ui.evaluate("state.followUp.target"), "w1:p2");
   assert.match(ui.evaluate("state.notice"), /follow-up/);
   assert.match(ui.evaluate("mainBody(71, 16).lines[1]"), /Fix the build.*codex/);
+});
+
+test("a recovered follow-up whose agent has gone opens as a launch instead", () => {
+  const { parseAgents } = require("../lib/running");
+  const draft = { kind: "codex", prompt: "again", failed: true, destination: "follow-up",
+    followUp: { target: "w1:p2", title: "Fix the build", kind: "codex", cwd: "/work/web" } };
+  const replaced = parseAgents({ agents: [{ agent: "claude", agent_status: "idle", pane_id: "w1:p2" }] });
+  for (const runningList of [[], replaced]) {
+    const ui = picker(draft, { runningList });
+    assert.equal(ui.evaluate("state.followUp"), null);
+    assert.match(ui.evaluate("state.notice"), /Fix the build is no longer running · ⏎ launches a new codex/);
+    assert.equal(ui.evaluate("agent().kind"), "codex");
+  }
+  const unknown = picker(draft, { runningList: null });
+  assert.equal(unknown.evaluate("state.followUp.target"), "w1:p2", "kept when Herdr does not answer");
+  unknown.evaluate("openRunning()");
+  assert.match(unknown.evaluate("runningBody(71, 16).lines[1]"), /herdr did not answer/);
+});
+
+test("listing running agents is bounded and tells a silent Herdr from an empty list", () => {
+  const calls = [];
+  const list = (reply) => load("lib/running.js", {
+    "./herdr": { run: (args, options) => { calls.push(options); return reply; } },
+  }).context.module.exports.runningAgents();
+  assert.equal(list({ ok: false, message: "spawnSync herdr ETIMEDOUT" }), null);
+  assert.deepEqual([...list({ ok: true, result: { agents: [] } })], []);
+  assert.ok(calls.every((options) => options.timeout > 0));
 });
 
 test("the worker sends a follow-up to the running agent without starting anything", () => {
