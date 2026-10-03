@@ -27,6 +27,7 @@ const { modelsFor, effortsFor, normalize, modelLabel } = require("../lib/models"
 const { PRESETS, readPresets, composePrompt } = require("../lib/presets");
 const { insideRepo } = require("../lib/worktree");
 const { runningAgents, matches } = require("../lib/running");
+const scratchpad = require("../lib/scratchpad");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
 const ATTACHMENTS = path.join(STATE_DIR, "attachments");
@@ -65,6 +66,8 @@ sweepStaleRequests();
 // it did not come from this box, and the one you left here stays for later.
 const handoff = process.env.QUICK_PROMPT_TEXT || null;
 const draft = handoff ? null : readDraft();
+// A handed-over prompt from Scratchpad is already a note there.
+const canSaveNote = !handoff && scratchpad.available();
 // Cleared once the draft has been thrown away, so the notice says so only once.
 let restored = Boolean(draft);
 // The duplicate action starts from the agent in the pane you came from, which
@@ -258,6 +261,7 @@ function presetRow() {
 function hints() {
   if (state.followUp) return "⏎ send · ctrl+r other agent · ctrl+v paste · \\⏎ newline · esc back";
   const verb = composePrompt(state.preset, state.prompt.text) ? "⏎ launch" : "⏎ open agent";
+  if (canSaveNote) return `${verb} · tab agent · ctrl+r follow up · ctrl+s note · esc cancel`;
   return `${verb} · tab agent · ctrl+r follow up · \\⏎ newline · esc cancel`;
 }
 
@@ -857,6 +861,8 @@ function onMainKey(chunk, key) {
     case key.ctrl && key.name === "t":
       cycleDestination();
       break;
+    case key.ctrl && key.name === "s":
+      return saveNote();
     case key.meta && /^[1-9]$/.test(key.name ?? ""):
       pickChip(Number(key.name) - 1);
       break;
@@ -1054,6 +1060,29 @@ function sendFollowUp() {
   });
   spawnDetached(process.execPath, [LAUNCHER, request]);
   quit(0);
+}
+
+// Not now: the prompt becomes a Scratchpad note for this directory, and the
+// box closes the way it does after a launch.
+function saveNote() {
+  const text = state.prompt.text.trim();
+  if (!canSaveNote) {
+    state.notice = handoff ? "this came from Scratchpad, so it is already a note there"
+      : "ctrl+s needs Scratchpad: herdr plugin install Taanviir/herdr-scratchpad";
+  } else if (!text) {
+    state.notice = "type something to save as a note";
+  } else {
+    const saved = scratchpad.save(text, { cwd: state.cwd, pane: originPane });
+    if (!saved.ok) {
+      state.notice = `not saved: ${saved.message}`;
+    } else {
+      recordPrompt(text);
+      clearDraft();
+      notify("Quick Prompt", `Saved to Scratchpad: ${saved.message}`, "done");
+      return quit(0);
+    }
+  }
+  scheduleRender();
 }
 
 // Closing keeps what you typed for next time; closing an empty box forgets it.
