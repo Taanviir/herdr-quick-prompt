@@ -21,6 +21,7 @@ const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
 const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
+const { insideRepo } = require("../lib/worktree");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
 
@@ -29,6 +30,7 @@ const DESTINATIONS = [
   { id: "right", label: "split right" },
   { id: "down", label: "split down" },
   { id: "workspace", label: "new workspace" },
+  { id: "worktree", label: "new worktree" },
 ];
 
 // Enough chips to be useful on a machine with nothing installed yet.
@@ -513,7 +515,7 @@ function onMainKey(chunk, key) {
       openDirectories();
       break;
     case key.ctrl && key.name === "t":
-      state.destination = (state.destination + 1) % DESTINATIONS.length;
+      cycleDestination();
       break;
     case key.meta && /^[1-9]$/.test(key.name ?? ""):
       pickChip(Number(key.name) - 1);
@@ -623,6 +625,13 @@ function onAgentsKey(chunk, key) {
   scheduleRender();
 }
 
+// A worktree needs a repository to branch from, so outside one it is skipped.
+function cycleDestination() {
+  do {
+    state.destination = (state.destination + 1) % DESTINATIONS.length;
+  } while (destination().id === "worktree" && !insideRepo(state.cwd));
+}
+
 // alt+N always means the same agent as the chip numbered N.
 function pickChip(index) {
   const chips = chipAgents();
@@ -638,6 +647,13 @@ function isPrintable(chunk, key) {
 function launch() {
   const chosen = agent();
   if (!chosen) return quit(0);
+
+  // The directory can change after the worktree was chosen, or a recovered
+  // draft can bring one along.
+  if (destination().id === "worktree" && !insideRepo(state.cwd)) {
+    state.notice = "no worktree outside a git repository · ctrl+t or ctrl+d to change";
+    return scheduleRender();
+  }
 
   remember(chosen.kind, destination().id, state.cwd);
   const request = writeRequest({
