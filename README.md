@@ -14,7 +14,7 @@ prompt.
 - **The prompt lands before the TUI paints.** Agents whose CLI takes a prompt as
   an argument get it at launch instead of being typed into.
 - **Pasting works** — bracketed paste, unmarked bursts, and `ctrl+v` reading your
-  system clipboard.
+  system clipboard. Dropped screenshots are copied before macOS deletes them.
 - **No dependencies, no build step.** Just Node.
 
 ## Install
@@ -55,6 +55,25 @@ You can also open it without a key:
 herdr plugin action invoke taanviir.quick-prompt.open
 ```
 
+### Duplicate the focused agent
+
+A second action, `duplicate`, opens the same popup set up to run another copy
+of whatever agent is in the pane you are on: that agent starts selected, and
+the directory is the one it is working in now. If it moved into a worktree, you
+get the worktree, not the directory its pane opened in. On a pane with no agent it opens exactly like
+`open`. The setup action only binds `open`, so add this one by hand:
+
+```toml
+[[keys.command]]
+key = "prefix+shift+a"
+type = "plugin_action"
+command = "taanviir.quick-prompt.duplicate"
+description = "Quick Prompt with the focused agent"
+```
+
+It is a separate action rather than the default so that `open` always starts
+from the agent you used last, wherever you press it.
+
 ## Using it
 
 Everything is on one screen, and the cursor starts in the prompt — just type and
@@ -71,7 +90,7 @@ press `enter`.
 | `ctrl+k` | the full agent list, filterable by typing |
 | `ctrl+t` | destination: new tab → split right → split down → new workspace |
 | `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
-| `esc` | cancel |
+| `esc` | close, keeping what you typed |
 
 Editing keys work as you would expect, in the prompt and the directory field:
 
@@ -92,11 +111,13 @@ first line, up recalls the prompts you launched before, newest first; past the
 last line, down walks forward again and ends on whatever you were typing. Long
 directory paths scroll horizontally to keep the cursor visible.
 
-If a launch fails, reopen Quick Prompt to recover the prompt, agent, directory,
-and destination. Edit it and press Enter to retry, or use `ctrl+u` to clear the
-text. Retrying uses the workspace and pane you open the picker from. Failed
-drafts stay in the plugin state directory until replaced by a retry; successful
-launch requests are removed.
+Closing with `esc` keeps what you typed. The next time you open Quick Prompt it
+starts on that draft, with the prompt, agent, directory, and destination as you
+left them and the cursor at the end. A launch that fails comes back the same way, so you can edit
+it and press Enter to retry. Either way, `ctrl+u` throws the draft away, and so
+does closing an empty box. Retrying uses the workspace and pane you open the
+picker from. There is only ever one draft, in the plugin state directory: a
+launch clears it, and one more than a day old is dropped.
 
 The numbered chips are the agents you actually have installed, so `alt+1`–`alt+9`
 always mean something. Their order is fixed on purpose — a number that points at
@@ -130,6 +151,17 @@ as text: bracketed paste when the terminal marks it, and a byte-count check when
 it does not. `ctrl+v` is not a terminal paste at all — the byte reaches the
 application — so the picker reads your clipboard itself through `wl-paste`,
 `xclip`, `xsel`, `pbpaste`, or PowerShell on WSL and Windows.
+
+Dropping a file onto the popup pastes its path, and some of those paths do not
+last until the agent reads them. A macOS screenshot dragged from its floating
+thumbnail lives in a `TemporaryItems` folder that macOS clears soon after, and
+its name has a narrow no-break space before `PM` that the agent types back as a
+plain one. So when a paste is nothing but paths to existing files, the picker
+copies two kinds of file to `attachments/` in the plugin state directory: any
+file under `TemporaryItems`, and any image whose path has spaces or non-ASCII
+characters. The copy gets a plain ASCII name, and the prompt gets its path.
+Every other path stays as pasted. The picker deletes copies older than a week
+the next time it makes one.
 
 New tabs are left unlabelled, so they get Herdr's ordinary numbering and the
 agent's own live title does the describing — a label frozen from your opening
