@@ -1041,6 +1041,17 @@ test("the agent in a pane is matched by pane id and reports its foreground direc
   assert.equal(agentInPane(undefined, "w1:p1"), null);
 });
 
+test("the popup's own calls to herdr and git are bounded", () => {
+  const options = [];
+  const spawnSync = (_, args, opts) => { options.push(opts); return { status: null, stdout: "", error: new Error("ETIMEDOUT") }; };
+  const agents = load("lib/agents.js", { "node:child_process": { spawnSync }, "./herdr": { BIN: "herdr", run() {} } }).context.module.exports;
+  assert.ok(agents.kinds().includes("claude"), "a silent herdr leaves the built-in list");
+  const worktree = load("lib/worktree.js", { "node:child_process": { spawnSync } }).context.module.exports;
+  assert.equal(worktree.insideRepo("/repo"), false);
+  assert.equal(options.length, 2);
+  assert.ok(options.every((opts) => opts.timeout > 0));
+});
+
 test("looking up the running agent is bounded and gives up quietly", () => {
   const calls = [];
   const lookup = (reply) => load("lib/agents.js", {
