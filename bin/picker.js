@@ -101,10 +101,16 @@ let launchAnyway = null;
 const draftDestination = DESTINATIONS.some((d) => d.id === draft?.destination) ? draft.destination : null;
 const draftModel = draft && (draft.model !== undefined || draft.effort !== undefined);
 
+// A worktree needs a repository, and the directory may not be one this time.
+function initialDestination(id) {
+  if (id === "worktree" && !insideRepo(draft?.cwd ?? cwd)) return 0;
+  return Math.max(0, DESTINATIONS.findIndex((d) => d.id === id));
+}
+
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
   agent: initialAgent(draft?.kind, prefs.recents[0]),
-  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draftDestination ?? prefs.destination))),
+  destination: initialDestination(draftDestination ?? prefs.destination),
   prompt: new Editor(handoff ?? draft?.prompt ?? ""),
   history: new History(readHistory()),
   cwd: draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
