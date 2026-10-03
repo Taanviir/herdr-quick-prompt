@@ -439,10 +439,10 @@ test("the prompt is wrapped once per edit and width, and the caret still follows
 
 test("state files are replaced whole, never rewritten in place", (t) => {
   const { dir, api } = stateIn("qp-atomic-test-");
-  api.recordPrompt("first");
+  api.recordPrompt({ text: "first" });
   const file = path.join(dir, "history.json");
   const before = fs.statSync(file).ino;
-  api.recordPrompt("second");
+  api.recordPrompt({ text: "second" });
   assert.notEqual(fs.statSync(file).ino, before, "a reader holding the old file still sees all of it");
   api.writeRequest({ kind: "codex", prompt: "x" });
   api.remember("codex", "tab", "/tmp");
@@ -897,21 +897,27 @@ test("prompt history keeps the last fifty launches, newest first and without rep
   vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
   const api = state.context.module.exports;
 
-  assert.deepEqual([...api.readHistory()], []);
-  api.recordPrompt("first");
-  api.recordPrompt("  second\n");
-  api.recordPrompt("   ");
-  api.recordPrompt("");
-  assert.deepEqual([...api.readHistory()], ["second", "first"], "trimmed, and blank launches are not kept");
+  const texts = () => [...api.readHistory()].map((entry) => entry.text);
+  assert.deepEqual(texts(), []);
+  api.recordPrompt({ text: "first" });
+  api.recordPrompt({ text: "  second\n", kind: "codex", preset: "review", model: { model: "gpt-5.5", effort: null } });
+  api.recordPrompt({ text: "   " });
+  api.recordPrompt({ text: "" });
+  assert.deepEqual(texts(), ["second", "first"], "trimmed, and blank launches are not kept");
+  assert.deepEqual({ ...api.readHistory()[0], model: { ...api.readHistory()[0].model } },
+    { text: "second", kind: "codex", preset: "review", model: { model: "gpt-5.5", effort: null } });
 
-  api.recordPrompt("first");
-  assert.deepEqual([...api.readHistory()], ["first", "second"], "a repeat moves to the front instead of appearing twice");
+  api.recordPrompt({ text: "first" });
+  assert.deepEqual(texts(), ["first", "second"], "a repeat moves to the front instead of appearing twice");
 
-  for (let n = 0; n < 60; n += 1) api.recordPrompt(`prompt ${n}`);
-  const history = api.readHistory();
+  for (let n = 0; n < 60; n += 1) api.recordPrompt({ text: `prompt ${n}` });
+  const history = texts();
   assert.equal(history.length, 50);
   assert.equal(history[0], "prompt 59");
   assert.equal(history[49], "prompt 10");
+
+  fs.writeFileSync(path.join(dir, "history.json"), JSON.stringify(["a plain string from before"]));
+  assert.deepEqual(texts(), [], "entries without their launch settings are dropped");
 
   fs.writeFileSync(path.join(dir, "history.json"), "{ not json");
   assert.deepEqual([...api.readHistory()], [], "a damaged history must not prevent opening the picker");
@@ -931,7 +937,7 @@ test("history walks back to the oldest entry and forward to the draft it set asi
 });
 
 test("up and down recall history only past the top and bottom of the prompt", () => {
-  const ui = picker(null, { history: ["second\nline", "first"] });
+  const ui = picker(null, { history: [{ text: "second\nline" }, { text: "first" }] });
   const press = (name) => ui.evaluate(`onMainKey(undefined, {name: '${name}'}); state.prompt.text`);
 
   ui.evaluate("state.prompt = new Editor('draft')");
@@ -947,6 +953,26 @@ test("up and down recall history only past the top and bottom of the prompt", ()
   ui.evaluate("state.prompt = new Editor('one\\ntwo')");
   assert.equal(press("up"), "one\ntwo", "up inside a multi-line draft still moves between its lines");
   assert.equal(ui.evaluate("state.prompt.cursor"), 3);
+});
+
+test("recalling a prompt brings back its agent, preset and model, and walking back restores yours", () => {
+  const review = { name: "review", agent: null, prefix: "Review:", postfix: "", task: "ask" };
+  const ui = picker(null, {
+    presets: [review],
+    history: [{ text: "check the diff", kind: "codex", preset: "review", model: { model: "gpt-5.5", effort: "high" } }],
+  });
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'claude'); state.prompt = new Editor('mine')");
+  ui.evaluate("onMainKey(undefined, {name: 'up'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "check the diff");
+  assert.equal(ui.evaluate("agent().kind"), "codex");
+  assert.equal(ui.evaluate("state.preset.name"), "review");
+  assert.deepEqual({ ...ui.evaluate("choice()") }, { model: "gpt-5.5", effort: "high" });
+  assert.equal(ui.evaluate("state.history.position"), 1);
+  ui.evaluate("onMainKey(undefined, {name: 'down'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "mine");
+  assert.equal(ui.evaluate("agent().kind"), "claude");
+  assert.equal(ui.evaluate("state.preset"), null);
+  assert.equal(ui.evaluate("state.history.position"), null);
 });
 
 test("launching records the prompt in history", () => {
@@ -967,7 +993,8 @@ test("launching records the prompt in history", () => {
     "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
   }, "/* ---------- boot ---------- */");
   ui.evaluate("quit = () => {}; state.prompt = new Editor('fix the bug'); launch()");
-  assert.deepEqual(recorded, ["fix the bug"]);
+  assert.deepEqual(recorded.map((entry) => ({ ...entry, model: { ...entry.model } })),
+    [{ text: "fix the bug", kind: "claude", preset: null, model: { model: null, effort: null } }]);
 });
 
 test("a paste far larger than the call stack lands whole, at the cursor", () => {
@@ -1476,6 +1503,8 @@ test("ctrl+s saves the prompt to Scratchpad from its directory and closes", () =
   ui.evaluate("quit = () => quitHook(); onMainKey('\x13', { ctrl: true, name: 's' })");
   assert.deepEqual(saves, [{ text: "look at the flaky test", cwd: "/repo", pane: undefined }]);
   assert.equal(ui.drafts(), null, "the draft is gone once it is a note");
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.state.readHistory()[0])), { text: "look at the flaky test", kind: "claude", preset: null, model: { model: null, effort: null } },
+    "it is in history like a launch");
   assert.equal(quit, true);
 });
 
