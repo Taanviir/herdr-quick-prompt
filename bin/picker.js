@@ -15,7 +15,7 @@ const { StringDecoder } = require("node:string_decoder");
 const { catalog } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, writeRequest, readFailedRequest, discardRequest, sweepStaleRequests } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
@@ -51,9 +51,9 @@ const originPane = process.env.QUICK_PROMPT_PANE ?? ctx.focused_pane_id ?? proce
 const prefs = readPrefs();
 const agents = catalog();
 sweepStaleRequests();
-const recovered = readFailedRequest();
-// Cleared once the draft has been taken up or thrown away, so neither happens twice.
-let recoveredFile = recovered?.file ?? null;
+const draft = readDraft();
+// Cleared once the draft has been thrown away, so the notice says so only once.
+let restored = Boolean(draft);
 const out = process.stdout;
 
 // A paste is a burst of keypresses: inside it a newline is content, not "launch",
@@ -70,12 +70,13 @@ let pendingEscapes = 0;
 
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
-  agent: Math.max(0, agents.findIndex((a) => a.kind === (recovered?.request.kind ?? prefs.recents[0]))),
-  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (recovered?.request.destination ?? prefs.destination))),
-  prompt: new Editor(recovered?.request.prompt ?? ""),
-  cwd: recovered?.request.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
+  agent: Math.max(0, agents.findIndex((a) => a.kind === (draft?.kind ?? prefs.recents[0]))),
+  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draft?.destination ?? prefs.destination))),
+  prompt: new Editor(draft?.prompt ?? ""),
+  cwd: draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   overlay: null, // { type: "agents" | "dirs", ... } while a picker is open
-  notice: recovered ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear" : null,
+  notice: draft?.failed ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear"
+    : draft ? "Restored draft · ctrl+u clear" : null,
 };
 
 // Every cell inside the popup has to be written: cells this never paints show
@@ -451,7 +452,7 @@ function onEscape() {
     state.overlay = null;
     return scheduleRender();
   }
-  quit(0);
+  close();
 }
 
 function insertPasted(text) {
@@ -490,7 +491,7 @@ function onMainKey(chunk, key) {
       prompt.moveVertical(1, content() - 2);
       break;
     case key.name === "escape":
-      return quit(0);
+      return close();
     case isNewline(chunk, key):
       prompt.insert("\n");
       break;
@@ -520,12 +521,12 @@ function onMainKey(chunk, key) {
       break;
     case key.ctrl && key.name === "u":
       prompt.clear();
-      // The recovery notice offers this as the way to be rid of the draft, so
-      // it has to actually throw it away rather than just empty the buffer.
-      if (recoveredFile) {
-        discardRequest(recoveredFile);
-        recoveredFile = null;
-        state.notice = "recovered draft discarded";
+      // The draft notice offers this as the way to be rid of the draft, so it
+      // has to actually throw it away rather than just empty the buffer.
+      if (restored) {
+        clearDraft();
+        restored = false;
+        state.notice = "draft discarded";
       }
       break;
     default:
@@ -640,6 +641,8 @@ function launch() {
   if (!chosen) return quit(0);
 
   remember(chosen.kind, destination().id, state.cwd);
+  // Before the worker exists, so a failure it records is never wiped by this.
+  clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
@@ -651,10 +654,18 @@ function launch() {
   });
 
   spawnDetached(process.execPath, [LAUNCHER, request]);
-  if (recoveredFile) {
-    discardRequest(recoveredFile);
-    recoveredFile = null;
+  quit(0);
+}
+
+// Closing keeps what you typed for next time; closing an empty box forgets it.
+function close() {
+  if (!state.prompt.text.trim()) {
+    clearDraft();
+    return quit(0);
   }
+  try {
+    saveDraft({ kind: agent().kind, prompt: state.prompt.text, destination: destination().id, cwd: state.cwd });
+  } catch { /* losing a draft is better than a modal that will not close */ }
   quit(0);
 }
 
