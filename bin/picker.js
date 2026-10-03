@@ -313,15 +313,20 @@ function runningBody(inner, rows) {
   list.slice(start, start + room).forEach((entry, index) => {
     const detail = `${entry.kind} · ${entry.status} · ${shortenPath(entry.cwd, 20)} `;
     const name = pad(truncate(` ${entry.title}`, inner - displayWidth(detail) - 2), inner - displayWidth(detail));
-    lines[1 + index] = start + index === active ? style.selected(name + detail) : name + style.dim(detail);
+    const plain = entry.status === "blocked" ? style.warn(detail) : style.dim(detail);
+    lines[1 + index] = start + index === active ? style.selected(name + detail) : name + plain;
   });
 
-  lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ follow up · esc back");
+  lines[rows - 1] = state.overlay.error
+    ? style.warn(state.overlay.error)
+    : style.dim("↑↓ select · type to filter · ⏎ follow up · esc back");
   return { lines, caret: null };
 }
 
 function onRunningKey(chunk, key) {
   const list = runningMatches();
+  const highlighted = list[Math.min(state.overlay.index, list.length - 1)];
+  state.overlay.error = null;
 
   switch (true) {
     case key.name === "escape" || (key.ctrl && key.name === "r"):
@@ -333,12 +338,15 @@ function onRunningKey(chunk, key) {
     case key.name === "down" || (key.ctrl && key.name === "n"):
       state.overlay.index = Math.min(list.length - 1, state.overlay.index + 1);
       break;
-    case key.name === "return" || key.name === "enter": {
-      const chosen = list[Math.min(state.overlay.index, list.length - 1)];
-      if (chosen) state.followUp = chosen;
+    // Herdr refuses a prompt to a blocked agent, so it would only come back as
+    // a failed draft.
+    case (key.name === "return" || key.name === "enter") && highlighted?.status === "blocked":
+      state.overlay.error = `${truncate(highlighted.title, 30)} is blocked · answer it in its pane first`;
+      break;
+    case key.name === "return" || key.name === "enter":
+      if (highlighted) state.followUp = highlighted;
       state.overlay = null;
       break;
-    }
     case key.name === "backspace":
       state.overlay.filter = state.overlay.filter.slice(0, -1);
       state.overlay.index = 0;

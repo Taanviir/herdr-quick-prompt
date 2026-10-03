@@ -1159,6 +1159,19 @@ test("a follow-up goes to the chosen agent, and esc backs out one step at a time
   assert.equal(ui.evaluate("state.followUp"), null, "esc leaves follow-up mode before it closes the picker");
 });
 
+test("a blocked agent is marked in the running list and cannot be chosen", () => {
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(null, { runningList: parseAgents({ agents: LISTED }) });
+  ui.evaluate("openRunning(); onRunningKey('t', {name: 't'}); onRunningKey('r', {name: 'r'}); onRunningKey('u', {name: 'u'})");
+  assert.match(ui.evaluate("runningBody(71, 16).lines[1]"), /Trust dialog.*blocked/);
+  ui.evaluate("onRunningKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("state.followUp"), null);
+  assert.equal(ui.evaluate("state.overlay.type"), "running", "the list stays open to pick another");
+  assert.match(ui.evaluate("runningBody(71, 16).lines[15]"), /Trust dialog is blocked · answer it in its pane first/);
+  ui.evaluate("onRunningKey('', {name: 'backspace'})");
+  assert.doesNotMatch(ui.evaluate("runningBody(71, 16).lines[15]"), /blocked/);
+});
+
 test("a recovered follow-up reopens aimed at the same agent", () => {
   const followUp = { target: "w1:p2", title: "Fix the build", kind: "codex", cwd: "/work/web" };
   const ui = picker({ kind: "codex", prompt: "again", followUp, failed: true });

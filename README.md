@@ -91,7 +91,8 @@ remembers its own choice. The model lists live in `lib/models.js`.
 
 **Follow-ups.** `ctrl+r` lists running agents, the ones waiting on you first.
 Pick one and Enter sends your prompt to it instead of starting a new agent.
-`esc` goes back to launching.
+`esc` goes back to launching. A blocked agent cannot be picked until you answer
+it in its own pane, since Herdr will not prompt it.
 
 **Saving for later.** With [Scratchpad](https://github.com/Taanviir/herdr-scratchpad)
 installed, `ctrl+s` turns the prompt into a note instead of launching it. The
