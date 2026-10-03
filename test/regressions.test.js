@@ -62,7 +62,7 @@ test("an agent busy with its inline prompt counts as started after readiness tim
 
 function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
   running = null, runningList = [], requests = [], recents = [], history = [], presets = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
-  env = {},
+  env = {}, scratch = { available: () => false, save: () => ({ ok: true, message: "" }) },
 } = {}) {
   return load("bin/picker.js", {
     "../lib/presets": {
@@ -89,6 +89,7 @@ function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
     },
     "../lib/running": { ...require("../lib/running"), runningAgents: () => runningList },
     "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
+    "../lib/scratchpad": scratch,
     "../lib/dirs": {
       expand: (value) => value,
       isDirectory: (value) => ["/tmp/", "/tmp/child"].includes(value),
@@ -770,6 +771,37 @@ test("a prompt handed over by another plugin fills the box and leaves the draft 
   ui.evaluate("launch()");
   assert.equal(drafts.cleared, 0, "launching does not clear the draft");
   assert.equal(requests.at(-1).prompt, "From my scratchpad:\n- [a1] fix it");
+});
+
+test("ctrl+s saves the prompt to Scratchpad from its directory and closes", () => {
+  const drafts = { saved: [], cleared: 0 };
+  const saves = [];
+  const scratch = { available: () => true, save: (text, where) => { saves.push({ text, ...where }); return { ok: true, message: "added a1b2c3" }; } };
+  const ui = picker({ kind: "claude", prompt: "  look at the flaky test  ", cwd: "/repo" }, drafts, { scratch });
+  assert.match(ui.evaluate("hints()"), /ctrl\+s note/);
+  let quit = false;
+  ui.context.quitHook = () => { quit = true; };
+  ui.evaluate("quit = () => quitHook(); onMainKey('\x13', { ctrl: true, name: 's' })");
+  assert.deepEqual(saves, [{ text: "look at the flaky test", cwd: "/repo", pane: undefined }]);
+  assert.equal(drafts.cleared, 1, "the draft is gone once it is a note");
+  assert.equal(quit, true);
+});
+
+test("ctrl+s explains itself when it cannot save, and keeps the prompt", () => {
+  const failing = { available: () => true, save: () => ({ ok: false, message: "notes are locked" }) };
+  const ui = picker(null, undefined, { scratch: failing });
+  ui.evaluate("state.prompt.insert('keep me'); onMainKey('\x13', { ctrl: true, name: 's' })");
+  assert.equal(ui.evaluate("state.notice"), "not saved: notes are locked");
+  assert.equal(ui.evaluate("state.prompt.text"), "keep me");
+
+  const missing = picker(null, undefined);
+  assert.doesNotMatch(missing.evaluate("hints()"), /ctrl\+s/);
+  missing.evaluate("state.prompt.insert('x'); onMainKey('\x13', { ctrl: true, name: 's' })");
+  assert.match(missing.evaluate("state.notice"), /needs Scratchpad/);
+
+  const handedOver = picker(null, undefined, { scratch: { available: () => true, save: () => assert.fail("saved a handoff") }, env: { QUICK_PROMPT_TEXT: "from notes" } });
+  handedOver.evaluate("onMainKey('\x13', { ctrl: true, name: 's' })");
+  assert.match(handedOver.evaluate("state.notice"), /already a note/);
 });
 
 test("duplicate selects the focused pane's agent and directory over recency and a draft", () => {
