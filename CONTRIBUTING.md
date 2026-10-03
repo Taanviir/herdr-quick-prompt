@@ -66,8 +66,9 @@ errors are appended to `crash.log` in the state directory — check there first.
 **A lone ESC byte is the Escape key.** Readline cannot tell `esc` from the start
 of an arrow key, so it waits 500ms before deciding — which is a very long time to
 watch a modal you just cancelled. Terminals send real escape sequences in one
-write, so a one-byte read containing `\x1b` is acted on immediately, and the
-keypress readline emits half a second later is dropped.
+write, so a one-byte read containing `\x1b` is acted on immediately and never
+reaches readline. Passed on, readline would read it together with the next key
+as alt+that key, and the key would be lost.
 
 **Herdr owns the popup's frame and size.** It draws the border and title, and
 hands the process fewer rows and columns than the manifest declares — three

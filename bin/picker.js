@@ -84,8 +84,6 @@ const ESC = 0x1b;
 const paste = { active: false, text: "" };
 let burst = "";
 let swallow = false;
-// Escapes already acted on, waiting for readline to emit them late.
-let pendingEscapes = 0;
 
 // The first of these that is a kind Herdr knows starts selected.
 function initialAgent(...wanted) {
@@ -700,11 +698,6 @@ function onKey(chunk, key = {}) {
   }
   // Keypresses belonging to a burst this already handled as pasted text.
   if (swallow) return;
-  // The late half of an escape already acted on above.
-  if (key.name === "escape" && pendingEscapes > 0) {
-    pendingEscapes -= 1;
-    return;
-  }
 
   if (key.ctrl && key.name === "c") return quit(0);
   if (key.ctrl && key.name === "v") {
@@ -716,22 +709,23 @@ function onKey(chunk, key = {}) {
 }
 
 // Runs before the keypress events for the same chunk, so it can claim a burst
-// the terminal did not mark as a paste.
+// the terminal did not mark as a paste. Returns true when it has dealt with the
+// chunk and readline must not see it.
 function onData(chunk) {
-  if (paste.active || swallow) return;
+  if (paste.active || swallow) return false;
 
   // A lone ESC byte in its own read is the Escape key. Terminals send real
   // escape sequences in a single write, so there is nothing more coming — but
   // readline cannot know that and waits 500ms before giving up on a sequence,
   // which is a very long time to watch a modal sit there after you cancelled it.
+  // Handed to readline anyway, it would swallow the next key as alt+key.
   if (chunk.length === 1 && chunk[0] === ESC) {
-    pendingEscapes += 1;
     onEscape();
-    return;
+    return true;
   }
 
-  if (chunk[0] === ESC) return; // an escape sequence, however long, is not a paste
-  if (chunk.length <= BURST_BYTES) return;
+  if (chunk[0] === ESC) return false; // an escape sequence, however long, is not a paste
+  if (chunk.length <= BURST_BYTES) return false;
 
   burst = chunk.toString("utf8");
   swallow = true;
@@ -743,6 +737,7 @@ function onData(chunk) {
     insertPasted(text);
     render();
   });
+  return false;
 }
 
 // Reading the clipboard can block for a second on WSL, so say what is happening
@@ -1136,8 +1131,7 @@ const keys = new PassThrough();
 process.stdin.on("data", (raw) => {
   const chunk = Buffer.from(legacyKeys(decoder.write(raw)));
   if (!chunk.length) return;
-  onData(chunk);
-  keys.write(chunk);
+  if (!onData(chunk)) keys.write(chunk);
 });
 
 readline.emitKeypressEvents(keys);
