@@ -38,7 +38,7 @@ test("structured readiness errors preserve their code and do not restart an agen
   const launcher = load("bin/launch.js", {
     "../lib/herdr": { run: () => { calls++; return result; } },
   }, "try {\n  const success = main();");
-  const started = launcher.evaluate('startAgent("qp-test", "test", "pane", null)');
+  const started = launcher.evaluate('startAgent("qp-test", "test", "pane", [])');
   assert.equal(started.started, true);
   assert.equal(started.ready, false);
   assert.equal(calls, 1);
@@ -54,7 +54,7 @@ test("an agent busy with its inline prompt counts as started after readiness tim
     "../lib/herdr": { run: () => replies[calls++] },
   }, "try {\n  const success = main();");
   launcher.evaluate("sleep = () => {}");
-  const started = launcher.evaluate('startAgent("qp-claude", "claude", "pane", "do the thing")');
+  const started = launcher.evaluate('startAgent("qp-claude", "claude", "pane", ["do the thing"])');
   assert.equal(started.started, true);
   assert.equal(started.ready, false);
   assert.equal(calls, 2);
@@ -198,7 +198,7 @@ test("a launch argument Herdr cannot encode is not retried", () => {
     },
   }, "try {\n  const success = main();");
   launcher.evaluate("sleep = () => {}");
-  const started = launcher.evaluate('startAgent("qp-claude", "claude", "pane", "do the thing")');
+  const started = launcher.evaluate('startAgent("qp-claude", "claude", "pane", ["do the thing"])');
   assert.equal(started.started, false);
   assert.equal(calls, 1);
 });
@@ -418,4 +418,44 @@ test("kitty protocol keys come back as the legacy bytes readline knows", () => {
   assert.equal(legacyKeys("\x1b[127;5u"), "\b");
   assert.equal(legacyKeys("\x1b[9;2u"), "\x1b[Z");
   assert.equal(legacyKeys("a\x1b[1;5Db"), "a\x1b[1;5Db");
+});
+
+test("model and effort become the CLI's own flags, and unknown choices none", () => {
+  const { modelArgs } = require("../lib/models");
+  assert.deepEqual(modelArgs("claude", { model: "opus", effort: "high" }), ["--model", "opus", "--effort", "high"]);
+  assert.deepEqual(modelArgs("claude", { model: null, effort: "max" }), ["--effort", "max"]);
+  assert.deepEqual(modelArgs("codex", { model: "gpt-6-sol", effort: "ultra" }),
+    ["-m", "gpt-6-sol", "-c", "model_reasoning_effort=ultra"]);
+  assert.deepEqual(modelArgs("codex", { model: "gpt-5.5", effort: "ultra" }), ["-m", "gpt-5.5"],
+    "an effort the model does not take is dropped");
+  assert.deepEqual(modelArgs("claude", { model: "retired-model", effort: "high" }), ["--effort", "high"]);
+  assert.deepEqual(modelArgs("claude", null), []);
+  assert.deepEqual(modelArgs("gemini", { model: "opus", effort: "high" }), []);
+});
+
+test("model flags go ahead of the inline prompt and survive falling back to typing it", () => {
+  for (const prompt of ["one line", "one\ntwo"]) {
+    const starts = [];
+    const launcher = load("bin/launch.js", {
+      "node:fs": { readFileSync: () => JSON.stringify({ kind: "codex", prompt, model: "gpt-5.5", effort: "low" }) },
+      "../lib/timing": { createTiming: () => null },
+      "../lib/agents": { supportsInlinePrompt: () => true },
+      "../lib/herdr": {
+        run: (args) => {
+          if (args[0] === "tab") return { ok: true, result: { root_pane: { pane_id: "test-pane" } } };
+          if (args[1] === "start") {
+            starts.push([...args.slice(args.indexOf("--") + 1)]);
+            if (starts.length === 1 && prompt === "one line") return { ok: false, message: "unexpected argument" };
+          }
+          return { ok: true, result: {} };
+        },
+      },
+    }, "try {\n  const success = main();");
+    launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+    launcher.evaluate("waitInteractive = () => true; deliverPrompt = () => true");
+    assert.equal(launcher.evaluate("main()"), true);
+    const flags = ["-m", "gpt-5.5", "-c", "model_reasoning_effort=low"];
+    if (prompt === "one line") assert.deepEqual(starts, [[...flags, prompt], flags]);
+    else assert.deepEqual(starts, [flags]);
+  }
 });
