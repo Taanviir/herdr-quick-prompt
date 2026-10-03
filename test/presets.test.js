@@ -22,13 +22,32 @@ test("a missing presets file is not a problem", (t) => {
 
 test("presets fill in their defaults and keep their order", (t) => {
   const { presets, problems } = readPresets(presetsFile(t, [
-    { name: " review ", agent: "codex", prefix: "Review this:", task: "skip" },
+    { name: " review ", agent: "codex", prefix: "Review this:", task: "skip", model: "gpt-5.5", effort: "high", destination: "right" },
     { name: "explain" },
   ]));
   assert.deepEqual(problems, []);
   assert.deepEqual(presets, [
-    { name: "review", agent: "codex", prefix: "Review this:", postfix: "", task: "skip" },
-    { name: "explain", agent: null, prefix: "", postfix: "", task: "ask" },
+    { name: "review", agent: "codex", prefix: "Review this:", postfix: "", task: "skip", model: "gpt-5.5", effort: "high", destination: "right" },
+    { name: "explain", agent: null, prefix: "", postfix: "", task: "ask", model: null, effort: null, destination: null },
+  ]);
+});
+
+test("a preset's model, effort and destination are checked against what exists", (t) => {
+  const { presets, problems } = readPresets(presetsFile(t, [
+    { name: "any agent", model: "opus" },
+    { name: "unknown model", agent: "claude", model: "gpt-5.5" },
+    { name: "unknown effort", agent: "codex", model: "gpt-5.5", effort: "ultra" },
+    { name: "no models", agent: "gemini", effort: "high" },
+    { name: "blank", model: " " },
+    { name: "nowhere", destination: "window" },
+  ]));
+  assert.deepEqual(presets.map((p) => p.name), ["any agent"]);
+  assert.deepEqual(problems, [
+    '"unknown model": claude has no model "gpt-5.5"',
+    '"unknown effort": gpt-5.5 takes no effort "ultra"',
+    '"no models": gemini has no model choice',
+    '"blank": model must be text',
+    '"nowhere": destination must be one of tab, right, down, workspace, worktree',
   ]);
 });
 

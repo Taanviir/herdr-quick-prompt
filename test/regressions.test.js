@@ -1270,6 +1270,39 @@ test("a preset selects its agent, shows itself, and comes off when picked again 
   assert.equal(ui.evaluate("mainBody(71, 16).lines[2]"), "");
 });
 
+test("a preset can choose the model and destination, and the list shows what it sends", () => {
+  const { displayWidth } = require("../lib/text");
+  const fast = { name: "fast", agent: "claude", prefix: "Be quick about this one, and do not overthink it.", postfix: "Reply in one line.",
+    task: "ask", model: "sonnet", effort: "low", destination: "right" };
+  const tree = { name: "tree", agent: null, prefix: "", postfix: "", task: "ask", model: null, effort: null, destination: "worktree" };
+  const requests = [];
+  const ui = picker(null, { presets: [fast, tree], requests });
+  ui.evaluate("openPresets()");
+  const body = ui.evaluate("presetsBody(71, 16)").lines;
+  assert.match(body[1], /claude · sonnet low · right/);
+  const preview = body[14].replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(preview, /^Be quick about this one.* ‹prompt› Reply in one line\.$/);
+  assert.ok(displayWidth(preview) <= 71);
+
+  ui.evaluate("onPresetsKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("destination().id"), "right");
+  assert.deepEqual({ ...ui.evaluate("choice()") }, { model: "sonnet", effort: "low" });
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex')");
+  assert.deepEqual({ ...ui.evaluate("choice()") }, { model: null, effort: null }, "only for the preset's own agent");
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'claude'); openModels(); onModelKey('', {name: 'up'}); onModelKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("choice().model"), "opus", "a model picked by hand wins over the preset's");
+
+  ui.evaluate("state.prompt = new Editor('go'); launch()");
+  assert.equal(requests[0].destination, "right");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(ui.dir, "prefs.json"), "utf8")).destination, "tab",
+    "the preset's destination does not become the default");
+
+  const outside = picker(null, { presets: [tree] });
+  outside.evaluate("applyPreset(presets[0])");
+  assert.equal(outside.evaluate("destination().id"), "tab");
+  assert.match(outside.evaluate("state.notice"), /no worktree outside a git repository/);
+});
+
 test("a skip preset launches over an empty prompt but not over a typed one", () => {
   const skip = { name: "tests", agent: "claude", prefix: "Run the tests.", postfix: "", task: "skip" };
   const ui = picker(null, { presets: [skip] });
