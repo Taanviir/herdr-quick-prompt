@@ -38,6 +38,7 @@ testing the published copy.
 | `lib/text.js` | Terminal-cell width and paste sanitising |
 | `lib/ui.js` | Colours, padding, truncation, path shortening |
 | `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
+| `lib/dropped.js` | Copying dropped files that would not survive until the agent reads them |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/state.js` | Preferences, launch requests and the draft under `HERDR_PLUGIN_STATE_DIR` |
 

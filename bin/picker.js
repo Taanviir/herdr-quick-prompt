@@ -19,10 +19,12 @@ const { STATE_DIR, readPrefs, remember, writeRequest, sweepStaleRequests, readDr
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
+const { stage } = require("../lib/dropped");
 const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
+const ATTACHMENTS = path.join(STATE_DIR, "attachments");
 
 const DESTINATIONS = [
   { id: "tab", label: "new tab" },
@@ -481,7 +483,9 @@ function insertPasted(text) {
     state.overlay.index = 0;
     return;
   }
-  state.prompt.insert(clean);
+  const dropped = stage(clean, ATTACHMENTS);
+  if (dropped?.failed.length) state.notice = `could not copy ${dropped.failed.join(", ")} · pasted its path`;
+  state.prompt.insert(dropped?.text ?? clean);
 }
 
 function cycleAgent(step) {
