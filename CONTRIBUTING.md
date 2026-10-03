@@ -31,7 +31,7 @@ testing the published copy.
 | `bin/open.js` | Resolves the caller's location and opens the popup |
 | `bin/setup.js` | Writes the keybinding into the user's `config.toml` |
 | `bin/picker.js` | The modal TUI: rendering, keys, paste |
-| `bin/launch.js` | Detached worker: creates the tab, split, workspace or worktree, starts the agent, delivers the prompt |
+| `bin/launch.js` | Detached worker: creates the tab, split, workspace or worktree, starts the agent, delivers the prompt; or sends a follow-up |
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
 | `lib/agents.js` | Agent catalog, `PATH` detection, which kinds take an inline prompt, the agent running in a pane |
 | `lib/models.js` | Models and efforts per kind for `ctrl+o`, and the launch flags they become |
@@ -42,6 +42,7 @@ testing the published copy.
 | `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
 | `lib/dropped.js` | Copying dropped files that would not survive until the agent reads them |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
+| `lib/running.js` | The running agents behind `ctrl+r`, waiting ones first |
 | `lib/worktree.js` | Branch names for the worktree destination, and the git repository check |
 | `lib/state.js` | Preferences, prompt history, launch requests and the draft under `HERDR_PLUGIN_STATE_DIR` |
 | `lib/presets.js` | Reading `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
@@ -100,8 +101,9 @@ Then read the output back and check it: no line wider than the terminal, the
 prompt where you expect it, and — for paste — that nothing launched.
 
 When changing anything the user can launch, remember that `bin/launch.js` starts
-a real agent in a real tab. Point `HERDR_BIN_PATH` at `/bin/true` to exercise the
-path without one.
+a real agent in a real tab, and a follow-up types into an agent you have running.
+Point `HERDR_BIN_PATH` at `/bin/true` to exercise the path without one, or at a
+script that prints a canned `agent list` to try follow-ups.
 
 ## Screenshots
 

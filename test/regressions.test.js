@@ -61,7 +61,7 @@ test("an agent busy with its inline prompt counts as started after readiness tim
 });
 
 function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
-  running = null, recents = [], history = [], presets = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
+  running = null, runningList = [], requests = [], recents = [], history = [], presets = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
 } = {}) {
   return load("bin/picker.js", {
     "../lib/presets": {
@@ -83,9 +83,10 @@ function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
       saveDraft: (saved) => drafts.saved.push(saved),
       clearDraft: () => { drafts.cleared += 1; return null; },
       remember: () => {},
-      writeRequest: () => "/tmp/request.json",
+      writeRequest: (request) => { requests.push(request); return "/tmp/request.json"; },
       sweepStaleRequests: () => {},
     },
+    "../lib/running": { ...require("../lib/running"), runningAgents: () => runningList },
     "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
     "../lib/dirs": {
       expand: (value) => value,
@@ -239,7 +240,7 @@ test("esc keeps a typed prompt as the draft, and an empty box forgets it", () =>
   ui.evaluate("quit = () => {}");
   ui.evaluate("state.agent = 2; state.destination = 1; state.cwd = '/tmp/child'; state.prompt = new Editor('half a thought')");
   ui.evaluate('onMainKey("", { name: "escape" })');
-  assert.deepEqual(JSON.parse(JSON.stringify(drafts.saved)), [{ kind: "codex", model: null, effort: null, prompt: "half a thought", preset: null, destination: "right", cwd: "/tmp/child" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(drafts.saved)), [{ kind: "codex", model: null, effort: null, prompt: "half a thought", preset: null, followUp: null, destination: "right", cwd: "/tmp/child" }]);
 
   ui.evaluate("state.prompt = new Editor('  \\n')");
   ui.evaluate("onEscape()");
@@ -769,4 +770,114 @@ test("duplicate selects the focused pane's agent and directory over recency and 
   assert.equal(unknown.evaluate("state.cwd"), "/tmp");
 
   assert.equal(picker(null, undefined, { recents: ["gemini"] }).evaluate("agent().kind"), "gemini");
+});
+
+const LISTED = [
+  { agent: "claude", agent_status: "working", pane_id: "w1:p1", cwd: "/work/api", terminal_title_stripped: "Refactor auth", state_change_seq: 9 },
+  { agent: "codex", agent_status: "idle", pane_id: "w1:p2", cwd: "/work/web", terminal_title_stripped: "Fix the build", state_change_seq: 3 },
+  { agent: "claude", agent_status: "blocked", pane_id: "w1:p3", cwd: "/work/api", terminal_title_stripped: "Trust dialog", state_change_seq: 12 },
+  { agent: "gemini", agent_status: "done", pane_id: "w2:p1", foreground_cwd: "/work/docs/site", cwd: "/work/docs", terminal_title_stripped: "", state_change_seq: 7 },
+  { agent: "pi", pane_id: "w2:p2", cwd: "/work/misc", state_change_seq: 1 },
+  { agent: "claude", agent_status: "idle", cwd: "/nowhere" },
+];
+
+test("running agents waiting on you come first, newest change first, blocked ones last", () => {
+  const { parseAgents } = require("../lib/running");
+  const parsed = parseAgents({ agents: LISTED });
+  assert.deepEqual(parsed.map((entry) => entry.target), ["w2:p1", "w1:p2", "w1:p1", "w2:p2", "w1:p3"],
+    "an agent without a pane cannot be prompted and is left out");
+  assert.deepEqual(parsed[0], {
+    target: "w2:p1", title: "gemini", kind: "gemini", status: "done", cwd: "/work/docs/site", changed: 7,
+  }, "an untitled agent goes by its kind, and by the directory it is working in");
+  assert.equal(parsed[3].status, "unknown");
+  assert.deepEqual(parseAgents({}), []);
+  assert.deepEqual(parseAgents(undefined), []);
+});
+
+test("the running list filters on title, kind and directory", () => {
+  const { parseAgents, matches } = require("../lib/running");
+  const parsed = parseAgents({ agents: LISTED });
+  const filtered = (text) => parsed.filter((entry) => matches(entry, text)).map((entry) => entry.target);
+  assert.deepEqual(filtered("AUTH"), ["w1:p1"]);
+  assert.deepEqual(filtered("codex"), ["w1:p2"]);
+  assert.deepEqual(filtered("docs/site"), ["w2:p1"]);
+  assert.deepEqual(filtered(""), parsed.map((entry) => entry.target));
+});
+
+test("a follow-up goes to the chosen agent, and esc backs out one step at a time", () => {
+  const { parseAgents } = require("../lib/running");
+  const requests = [];
+  const ui = picker(null, undefined, { runningList: parseAgents({ agents: LISTED }), requests });
+  ui.evaluate("quit = () => {}");
+
+  ui.evaluate("onMainKey('\\x12', {ctrl: true, name: 'r'})");
+  assert.equal(ui.evaluate("state.overlay.type"), "running");
+  assert.match(ui.evaluate("runningBody(71, 16).lines[1]"), /gemini · done/);
+  ui.evaluate("onRunningKey('', {name: 'escape'})");
+  assert.equal(ui.evaluate("state.overlay"), null, "esc in the list goes back to the prompt");
+  assert.equal(ui.evaluate("state.followUp"), null);
+
+  ui.evaluate("openRunning(); onRunningKey('f', {name: 'f'}); onRunningKey('i', {name: 'i'}); onRunningKey('x', {name: 'x'})");
+  ui.evaluate("onRunningKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("state.followUp.target"), "w1:p2");
+  assert.match(ui.evaluate("mainBody(71, 16).lines[1]"), /→.*Fix the build/);
+
+  const agentBefore = ui.evaluate("state.agent");
+  ui.evaluate("onMainKey('\\t', {name: 'tab'}); onMainKey('\\x14', {ctrl: true, name: 't'}); onMainKey('\\x0b', {ctrl: true, name: 'k'})");
+  assert.equal(ui.evaluate("state.agent"), agentBefore, "the agent is fixed in a follow-up");
+  assert.equal(ui.evaluate("destination().id"), "tab");
+  assert.equal(ui.evaluate("state.overlay"), null);
+
+  ui.evaluate("onMainKey('\\r', {name: 'return'})");
+  assert.equal(requests.length, 0, "an empty follow-up is not sent");
+  ui.evaluate("state.prompt = new Editor('also update the tests'); onMainKey('\\r', {name: 'return'})");
+  const sent = requests[0];
+  assert.equal(sent.prompt, "also update the tests");
+  assert.equal(sent.followUp.target, "w1:p2");
+  assert.equal(sent.workspace, undefined, "a follow-up creates nothing, so it has nowhere to go");
+
+  ui.evaluate("onMainKey('', {name: 'escape'})");
+  assert.equal(ui.evaluate("state.followUp"), null, "esc leaves follow-up mode before it closes the picker");
+});
+
+test("a recovered follow-up reopens aimed at the same agent", () => {
+  const followUp = { target: "w1:p2", title: "Fix the build", kind: "codex", cwd: "/work/web" };
+  const ui = picker({ kind: "codex", prompt: "again", followUp, failed: true });
+  assert.equal(ui.evaluate("state.followUp.target"), "w1:p2");
+  assert.match(ui.evaluate("state.notice"), /follow-up/);
+  assert.match(ui.evaluate("mainBody(71, 16).lines[1]"), /Fix the build.*codex/);
+});
+
+test("the worker sends a follow-up to the running agent without starting anything", () => {
+  for (const ok of [true, false]) {
+    const calls = [];
+    const finished = [];
+    const notifications = [];
+    const launcher = load("bin/launch.js", {
+      "node:fs": { readFileSync: () => JSON.stringify({
+        kind: "codex", prompt: "one\ntwo", destination: "follow-up",
+        followUp: { target: "w1:p2", title: "Fix the build", kind: "codex", cwd: "/work/web" },
+      }) },
+      "../lib/state": { finishRequest: (file, success) => finished.push(success) },
+      "../lib/timing": { createTiming: () => null },
+      "../lib/herdr": {
+        HerdrError: Error,
+        notify: (...args) => notifications.push(args),
+        run: (args) => {
+          calls.push(args);
+          return ok ? { ok: true, result: {} } : { ok: false, code: "agent_blocked", message: "agent is blocked" };
+        },
+      },
+    }, "try {\n  const success = main();");
+    launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+    launcher.context.process.exit = () => {};
+    const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
+    launcher.evaluate(source.slice(source.indexOf("try {\n  const success = main();")));
+
+    assert.equal(calls.length, 1, "no tab, no agent start, no list");
+    assert.deepEqual([...calls[0].slice(0, 4)], ["agent", "prompt", "w1:p2", "one\ntwo"]);
+    assert.ok(calls[0].includes("--wait"));
+    assert.deepEqual(finished, [ok]);
+    if (!ok) assert.match(notifications[0][1], /Fix the build.*agent is blocked.*recover your draft/);
+  }
 });

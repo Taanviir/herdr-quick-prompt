@@ -26,6 +26,7 @@ const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 const { modelsFor, effortsFor, normalize, modelLabel } = require("../lib/models");
 const { PRESETS, readPresets, composePrompt } = require("../lib/presets");
 const { insideRepo } = require("../lib/worktree");
+const { runningAgents, matches } = require("../lib/running");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
 const ATTACHMENTS = path.join(STATE_DIR, "attachments");
@@ -96,9 +97,10 @@ const state = {
   history: new History(readHistory()),
   cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   preset: draft?.preset ?? null,
+  followUp: draft?.followUp ?? null, // the running agent Enter sends to, instead of launching
   models: draft ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
-  overlay: null, // { type: "agents" | "dirs" | "presets" | "model", ... } while a picker is open
-  notice: draft?.failed ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear"
+  overlay: null, // { type: "agents" | "dirs" | "presets" | "model" | "running", ... } while a picker is open
+  notice: draft?.failed ? `Recovered failed ${draft.followUp ? "follow-up" : "launch"} · edit or Enter to retry · ctrl+u clear`
     : draft ? "Restored draft · ctrl+u clear" : null,
 };
 
@@ -158,13 +160,13 @@ function render() {
 
 function mainBody(inner, rows) {
   const lines = new Array(rows).fill("");
-  lines[1] = chipRow(inner);
+  lines[1] = state.followUp ? followUpRow(inner) : chipRow(inner);
   if (state.preset) lines[2] = presetRow();
 
   const caret = promptBlock(lines, 3, Math.max(1, rows - 6), inner);
 
   lines[rows - 3] = style.dim("─".repeat(inner));
-  lines[rows - 2] = destinationRow(inner);
+  lines[rows - 2] = state.followUp ? followUpWhere(inner) : destinationRow(inner);
   lines[rows - 1] = state.notice ? style.warn(state.notice) : style.dim(hints());
   return { lines, caret };
 }
@@ -249,8 +251,93 @@ function presetRow() {
 }
 
 function hints() {
+  if (state.followUp) return "⏎ send · ctrl+r other agent · ctrl+v paste · \\⏎ newline · esc back";
   const verb = composePrompt(state.preset, state.prompt.text) ? "⏎ launch" : "⏎ open agent";
-  return `${verb} · tab agent · ctrl+v paste · \\⏎ newline · esc cancel`;
+  return `${verb} · tab agent · ctrl+r follow up · \\⏎ newline · esc cancel`;
+}
+
+/* ---------- follow-up to a running agent ---------- */
+
+function followUpRow(inner) {
+  const { title, kind, status } = state.followUp;
+  const tail = style.dim(status ? `${kind} · ${status}` : kind);
+  const name = truncate(title, Math.max(8, inner - displayWidth(tail) - 3));
+  const head = `${style.accent("→")} ${style.bright(name)}`;
+  return head + " ".repeat(Math.max(1, inner - displayWidth(head) - displayWidth(tail))) + tail;
+}
+
+function followUpWhere(inner) {
+  const where = shortenPath(state.followUp.cwd, Math.max(12, inner - 24));
+  return `${style.dim("→")} follow-up ${style.dim("(ctrl+r)")} ${style.dim("·")} ${where}`;
+}
+
+function openRunning() {
+  state.overlay = { type: "running", filter: "", index: 0, agents: runningAgents() };
+}
+
+function runningMatches() {
+  return state.overlay.agents.filter((entry) => matches(entry, state.overlay.filter));
+}
+
+function runningBody(inner, rows) {
+  const lines = new Array(rows).fill("");
+  const list = runningMatches();
+
+  lines[0] = state.overlay.filter
+    ? `${style.dim("running agent")}  ${style.accent(state.overlay.filter)}${style.dim("▏")}`
+    : style.dim("running agent");
+
+  if (list.length === 0) {
+    lines[1] = style.warn(state.overlay.agents.length ? "no running agent matches that filter" : "no agents are running");
+    lines[rows - 1] = style.dim("esc back");
+    return { lines, caret: null };
+  }
+
+  const room = rows - 2;
+  const active = Math.min(state.overlay.index, list.length - 1);
+  const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
+
+  list.slice(start, start + room).forEach((entry, index) => {
+    const detail = `${entry.kind} · ${entry.status} · ${shortenPath(entry.cwd, 20)} `;
+    const name = pad(truncate(` ${entry.title}`, inner - displayWidth(detail) - 2), inner - displayWidth(detail));
+    lines[1 + index] = start + index === active ? style.selected(name + detail) : name + style.dim(detail);
+  });
+
+  lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ follow up · esc back");
+  return { lines, caret: null };
+}
+
+function onRunningKey(chunk, key) {
+  const list = runningMatches();
+
+  switch (true) {
+    case key.name === "escape" || (key.ctrl && key.name === "r"):
+      state.overlay = null;
+      break;
+    case key.name === "up" || (key.ctrl && key.name === "p"):
+      state.overlay.index = Math.max(0, Math.min(state.overlay.index, list.length - 1) - 1);
+      break;
+    case key.name === "down" || (key.ctrl && key.name === "n"):
+      state.overlay.index = Math.min(list.length - 1, state.overlay.index + 1);
+      break;
+    case key.name === "return" || key.name === "enter": {
+      const chosen = list[Math.min(state.overlay.index, list.length - 1)];
+      if (chosen) state.followUp = chosen;
+      state.overlay = null;
+      break;
+    }
+    case key.name === "backspace":
+      state.overlay.filter = state.overlay.filter.slice(0, -1);
+      state.overlay.index = 0;
+      break;
+    case isPrintable(chunk, key):
+      state.overlay.filter += chunk.toLowerCase();
+      state.overlay.index = 0;
+      break;
+    default:
+      return;
+  }
+  scheduleRender();
 }
 
 /* ---------- the full agent list ---------- */
@@ -674,7 +761,14 @@ function onEscape() {
     state.overlay = null;
     return scheduleRender();
   }
-  close();
+  back();
+}
+
+// Out of a follow-up and back to launching, or out of the picker altogether.
+function back() {
+  if (!state.followUp) return close();
+  state.followUp = null;
+  scheduleRender();
 }
 
 function insertPasted(text) {
@@ -718,7 +812,10 @@ function onMainKey(chunk, key) {
       if (!prompt.moveVertical(1, content() - 2)) recall(state.history.newer());
       break;
     case key.name === "escape":
-      return close();
+      return back();
+    // A running agent already has its kind, its place and its directory.
+    case Boolean(state.followUp) && launchControl(key):
+      return;
     case isNewline(chunk, key):
       prompt.insert("\n");
       break;
@@ -739,6 +836,9 @@ function onMainKey(chunk, key) {
       break;
     case key.ctrl && key.name === "d":
       openDirectories();
+      break;
+    case key.ctrl && key.name === "r":
+      openRunning();
       break;
     case key.ctrl && key.name === "o":
       openModels();
@@ -769,6 +869,12 @@ function onMainKey(chunk, key) {
       if (!editKey(prompt, chunk, key)) return;
   }
   scheduleRender();
+}
+
+function launchControl(key) {
+  return key.name === "tab"
+    || (key.ctrl && ["k", "t", "d", "o"].includes(key.name))
+    || (key.meta && /^[1-9]$/.test(key.name ?? ""));
 }
 
 function recall(text) {
@@ -886,11 +992,14 @@ const OVERLAYS = {
   dirs: { body: dirsBody, key: onDirsKey },
   model: { body: modelBody, key: onModelKey },
   presets: { body: presetsBody, key: onPresetsKey },
+  running: { body: runningBody, key: onRunningKey },
 };
 
 /* ---------- launch ---------- */
 
 function launch() {
+  if (state.followUp) return sendFollowUp();
+
   const chosen = agent();
   if (!chosen) return quit(0);
 
@@ -921,6 +1030,27 @@ function launch() {
   quit(0);
 }
 
+// A running agent is already at its prompt, so an empty one has nothing to do.
+function sendFollowUp() {
+  if (!composePrompt(state.preset, state.prompt.text)) {
+    state.notice = "type a follow-up to send";
+    return scheduleRender();
+  }
+  const { target, title, kind, cwd } = state.followUp;
+  recordPrompt(state.prompt.text);
+  clearDraft();
+  const request = writeRequest({
+    submittedAt: Date.now(),
+    kind,
+    prompt: state.prompt.text.trim(),
+    preset: state.preset,
+    destination: "follow-up",
+    followUp: { target, title, kind, cwd },
+  });
+  spawnDetached(process.execPath, [LAUNCHER, request]);
+  quit(0);
+}
+
 // Closing keeps what you typed for next time; closing an empty box forgets it.
 function close() {
   if (!state.prompt.text.trim()) {
@@ -928,7 +1058,7 @@ function close() {
     return quit(0);
   }
   try {
-    saveDraft({ kind: agent().kind, ...choice(), prompt: state.prompt.text, preset: state.preset, destination: destination().id, cwd: state.cwd });
+    saveDraft({ kind: agent().kind, ...choice(), prompt: state.prompt.text, preset: state.preset, followUp: state.followUp, destination: destination().id, cwd: state.cwd });
   } catch { /* losing a draft is better than a modal that will not close */ }
   quit(0);
 }
