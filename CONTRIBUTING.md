@@ -40,6 +40,7 @@ testing the published copy.
 | `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/state.js` | Preferences and launch requests under `HERDR_PLUGIN_STATE_DIR` |
+| `lib/presets.js` | Reading `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
 
 ## Things that will bite you
 
