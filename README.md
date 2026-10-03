@@ -84,6 +84,7 @@ press `enter`.
 | `⏎` | launch (an empty prompt just opens the agent) |
 | `\` `⏎`, `shift+⏎`, `ctrl+⏎`, `alt+⏎`, `ctrl+j` | newline in the prompt |
 | `ctrl+v` | paste from the system clipboard |
+| `↑` / `↓` | older / newer prompt from history, from the first / last line of the prompt |
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1`…`alt+9` | jump straight to a numbered agent |
 | `ctrl+k` | the full agent list, filterable by typing |
@@ -105,7 +106,9 @@ On macOS, option+arrow moves by word once the terminal sends Option as Meta or
 Esc (iTerm2, Terminal.app, and Ghostty all have the setting), and cmd+arrow works
 wherever the terminal maps it to Home/End or `ctrl+a`/`ctrl+e`.
 
-Up/down moves between displayed prompt lines, including wrapped lines. Long
+Up/down moves between displayed prompt lines, including wrapped lines. Past the
+first line, up recalls the prompts you launched before, newest first; past the
+last line, down walks forward again and ends on whatever you were typing. Long
 directory paths scroll horizontally to keep the cursor visible.
 
 Closing with `esc` keeps what you typed. The next time you open Quick Prompt it
@@ -191,7 +194,9 @@ when an agent misbehaves with a launch argument.
 
 The agent list is read from `herdr agent start --help` at runtime, so new agent
 kinds appear as soon as Herdr supports them. Your recent agents and last
-destination live in `HERDR_PLUGIN_STATE_DIR`.
+destination live in `HERDR_PLUGIN_STATE_DIR`, and so does `history.json`: your
+last 50 launched prompts, stored as plain text so that `↑` can recall them.
+Delete the file to forget them.
 
 The picker renders inside the popup Herdr already draws, so it has no border or
 title of its own, and it never moves its own working directory: the manifest
@@ -203,7 +208,8 @@ from travels as `QUICK_PROMPT_CWD` instead.
 Launch timings are recorded in `startup.jsonl` under `HERDR_PLUGIN_STATE_DIR`
 (on Linux, normally `~/.local/state/herdr/plugins/taanviir.quick-prompt/`).
 Each record includes dispatch time, individual Herdr calls, retry sleeps, and
-total worker time. Prompt text and command arguments are not logged. The log
+total worker time. Prompt text and command arguments are not logged here; your
+prompt history is kept apart from it, in `history.json`. The log
 rotates after 256 KiB, retaining one previous file. `agent start` includes Herdr's
 readiness detection, so its duration is not an exact measurement of first paint.
 

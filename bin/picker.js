@@ -14,8 +14,9 @@ const { StringDecoder } = require("node:string_decoder");
 
 const { catalog, runningAgent } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
+const { History } = require("../lib/history");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
@@ -87,6 +88,7 @@ const state = {
   agent: initialAgent(duplicate?.kind, draft?.kind, prefs.recents[0]),
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draft?.destination ?? prefs.destination))),
   prompt: new Editor(draft?.prompt ?? ""),
+  history: new History(readHistory()),
   cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   overlay: null, // { type: "agents" | "dirs", ... } while a picker is open
   notice: draft?.failed ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear"
@@ -500,11 +502,13 @@ function onMainKey(chunk, key) {
   state.notice = null;
 
   switch (true) {
+    // Up and down walk the prompt's own lines first and history only past its
+    // top and bottom, so a multi-line prompt stays editable.
     case key.name === "up":
-      prompt.moveVertical(-1, content() - 2);
+      if (!prompt.moveVertical(-1, content() - 2)) recall(state.history.older(prompt.text));
       break;
     case key.name === "down":
-      prompt.moveVertical(1, content() - 2);
+      if (!prompt.moveVertical(1, content() - 2)) recall(state.history.newer());
       break;
     case key.name === "escape":
       return close();
@@ -549,6 +553,10 @@ function onMainKey(chunk, key) {
       if (!editKey(prompt, chunk, key)) return;
   }
   scheduleRender();
+}
+
+function recall(text) {
+  if (text !== null) state.prompt = new Editor(text);
 }
 
 // Plain \r launches. \n is ctrl+j, or shift+enter and ctrl+enter as
@@ -657,6 +665,7 @@ function launch() {
   if (!chosen) return quit(0);
 
   remember(chosen.kind, destination().id, state.cwd);
+  recordPrompt(state.prompt.text);
   // Before the worker exists, so a failure it records is never wiped by this.
   clearDraft();
   const request = writeRequest({

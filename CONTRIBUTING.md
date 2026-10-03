@@ -35,12 +35,13 @@ testing the published copy.
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
 | `lib/agents.js` | Agent catalog, `PATH` detection, which kinds take an inline prompt, the agent running in a pane |
 | `lib/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
+| `lib/history.js` | Walking earlier prompts with `↑`/`↓`, keeping the unsent draft aside |
 | `lib/text.js` | Terminal-cell width and paste sanitising |
 | `lib/ui.js` | Colours, padding, truncation, path shortening |
 | `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
 | `lib/dropped.js` | Copying dropped files that would not survive until the agent reads them |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
-| `lib/state.js` | Preferences, launch requests and the draft under `HERDR_PLUGIN_STATE_DIR` |
+| `lib/state.js` | Preferences, prompt history, launch requests and the draft under `HERDR_PLUGIN_STATE_DIR` |
 
 ## Things that will bite you
 
