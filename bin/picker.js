@@ -62,14 +62,16 @@ const agents = catalog();
 const { presets, problems: presetProblems } = readPresets();
 sweepStaleRequests();
 // Another plugin can open the picker with the prompt already written, as
-// Scratchpad does with notes. A handed-over prompt never touches the draft:
+// Scratchpad does with notes. A handed-over prompt never touches the drafts:
 // it did not come from this box, and the one you left here stays for later.
 const handoff = process.env.QUICK_PROMPT_TEXT || null;
-const draft = handoff ? null : readDraft();
+const { draft = null, file: openedDraft = null } = (handoff ? null : readDraft()) ?? {};
 // A handed-over prompt from Scratchpad is already a note there.
 const canSaveNote = !handoff && scratchpad.available();
-// Cleared once the draft has been thrown away, so the notice says so only once.
-let restored = Boolean(draft);
+// The draft file this popup opened, and the only one it may replace or clear:
+// a launch that fails while it is open leaves a draft of its own. Null once
+// thrown away, so the notice says so only once, and always null for a handoff.
+let draftFile = openedDraft;
 // The duplicate action starts from the agent in the pane you came from, which
 // is a deliberate ask, so it outranks both a restored draft and recency.
 const duplicate = process.env.QUICK_PROMPT_DUPLICATE ? runningAgent(originPane) : null;
@@ -865,9 +867,9 @@ function onMainKey(chunk, key) {
       prompt.clear();
       // The draft notice offers this as the way to be rid of the draft, so it
       // has to actually throw it away rather than just empty the buffer.
-      if (restored) {
-        clearDraft();
-        restored = false;
+      if (draftFile) {
+        clearDraft(draftFile);
+        draftFile = null;
         state.notice = "draft discarded";
       }
       break;
@@ -1018,8 +1020,6 @@ function launch() {
 
   remember(chosen.kind, destination().id, state.cwd, choice());
   recordPrompt(state.prompt.text);
-  // Before the worker exists, so a failure it records is never wiped by this.
-  if (!handoff) clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
@@ -1031,6 +1031,8 @@ function launch() {
     workspace,
     pane: originPane,
   });
+  // Only once the request holds the prompt.
+  clearDraft(draftFile);
 
   spawnDetached(process.execPath, [LAUNCHER, request]);
   quit(0);
@@ -1044,7 +1046,6 @@ function sendFollowUp() {
   }
   const { target, title, kind, cwd } = state.followUp;
   recordPrompt(state.prompt.text);
-  if (!handoff) clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind,
@@ -1053,6 +1054,7 @@ function sendFollowUp() {
     destination: "follow-up",
     followUp: { target, title, kind, cwd },
   });
+  clearDraft(draftFile);
   spawnDetached(process.execPath, [LAUNCHER, request]);
   quit(0);
 }
@@ -1072,7 +1074,7 @@ function saveNote() {
       state.notice = `not saved: ${saved.message}`;
     } else {
       recordPrompt(text);
-      clearDraft();
+      clearDraft(draftFile);
       notify("Quick Prompt", `Saved to Scratchpad: ${saved.message}`, "done");
       return quit(0);
     }
@@ -1080,15 +1082,17 @@ function saveNote() {
   scheduleRender();
 }
 
-// Closing keeps what you typed for next time; closing an empty box forgets it.
+// Closing keeps what you typed for next time, in place of the draft this
+// opened with; closing an empty box forgets that draft.
+function keepDraft() {
+  if (!state.prompt.text.trim()) return clearDraft(draftFile);
+  saveDraft({ kind: agent().kind, ...choice(), prompt: state.prompt.text, preset: state.preset, followUp: state.followUp, destination: destination().id, cwd: state.cwd }, draftFile);
+}
+
 function close() {
   if (handoff) return quit(0);
-  if (!state.prompt.text.trim()) {
-    clearDraft();
-    return quit(0);
-  }
   try {
-    saveDraft({ kind: agent().kind, ...choice(), prompt: state.prompt.text, preset: state.preset, followUp: state.followUp, destination: destination().id, cwd: state.cwd });
+    keepDraft();
   } catch { /* losing a draft is better than a modal that will not close */ }
   quit(0);
 }

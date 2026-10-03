@@ -97,8 +97,9 @@ brings notes back here as a prompt.
 
 **Drafts and history.** Closing with `esc` keeps your prompt, agent,
 destination and directory for next time. A launch that fails comes back the
-same way, so you can retry. `↑` past the first line recalls your last 50
-prompts.
+same way, so you can retry. When several are waiting, the newest opens first
+and the rest follow one per opening. `↑` past the first line recalls your
+last 50 prompts.
 
 **Pasting.** Pastes work in any terminal, and `ctrl+v` reads the clipboard
 itself. If you drop a macOS screenshot from its floating thumbnail, macOS
@@ -147,7 +148,7 @@ Everything lives in the plugin state directory, normally
 | --- | --- |
 | `prefs.json` | recent agents, directories, destination, models |
 | `history.json` | your last 50 prompts, as plain text; delete it to forget them |
-| `draft.json` | the unsent or failed prompt, dropped after a day |
+| `draft-*.json` | unsent and failed prompts, one per file, dropped after a day |
 | `attachments/` | copied screenshots, deleted after a week |
 | `startup.jsonl` | launch timings, without prompt text |
 | `crash.log` | errors from the popup |
