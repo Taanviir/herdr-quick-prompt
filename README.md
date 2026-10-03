@@ -145,6 +145,30 @@ Everything lives in the plugin state directory, normally
 | `startup.jsonl` | launch timings, without prompt text |
 | `crash.log` | errors from the popup |
 
+## From other plugins
+
+Another plugin can open Quick Prompt with the prompt already written, so it
+gets the agent picker, destinations, presets and follow-ups without building
+its own. [Scratchpad](https://github.com/Taanviir/herdr-scratchpad) does this
+to hand notes to an agent.
+
+```bash
+herdr plugin pane open --plugin taanviir.quick-prompt --entrypoint picker \
+  --env QUICK_PROMPT_TEXT="Fix the login bug" \
+  --env QUICK_PROMPT_SOURCE="My plugin" \
+  --env QUICK_PROMPT_CWD="$PWD"
+```
+
+| Variable | |
+| --- | --- |
+| `QUICK_PROMPT_TEXT` | the prompt to start with |
+| `QUICK_PROMPT_SOURCE` | named in the notice, as "From …" |
+| `QUICK_PROMPT_CWD` | the directory it starts in |
+| `QUICK_PROMPT_WORKSPACE`, `QUICK_PROMPT_PANE` | where tabs and splits open |
+
+A handed-over prompt is not saved as your draft, and any draft you left stays
+for next time.
+
 ## Troubleshooting
 
 **The popup flashes and closes.** Check `crash.log` above. If it is empty,
