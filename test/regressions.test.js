@@ -201,11 +201,11 @@ function stateIn(prefix) {
 // given. `ui.state` reads and writes that directory as the picker does.
 function picker(draft = null, {
   running = null, runningList = [], requests = [], recents = [], history = [], presets = [],
-  installed = ["claude", "codex", "copilot", "cursor", "gemini"],
+  installed = ["claude", "codex", "copilot", "cursor", "gemini"], prefs = { recents },
   env = {}, scratchpad = { available: () => false, save: () => ({ ok: true, message: "" }) },
 } = {}) {
   const { dir, api } = stateIn("qp-picker-");
-  if (recents.length) fs.writeFileSync(path.join(dir, "prefs.json"), JSON.stringify({ recents }));
+  fs.writeFileSync(path.join(dir, "prefs.json"), JSON.stringify(prefs));
   if (history.length) fs.writeFileSync(path.join(dir, "history.json"), JSON.stringify(history));
   if (draft) api.saveDraft(draft);
   const ui = load("bin/picker.js", {
@@ -1179,6 +1179,30 @@ test("a recovered follow-up reopens aimed at the same agent", () => {
   assert.equal(ui.evaluate("state.followUp.target"), "w1:p2");
   assert.match(ui.evaluate("state.notice"), /follow-up/);
   assert.match(ui.evaluate("mainBody(71, 16).lines[1]"), /Fix the build.*codex/);
+});
+
+const FAILED_FOLLOW_UP = { kind: "codex", prompt: "again", failed: true, destination: "follow-up", preset: { name: "review", prefix: "Review:", postfix: "" },
+  followUp: { target: "w1:p2", title: "Fix the build", kind: "codex", cwd: "/work/web" } };
+
+test("a recovered follow-up does not reset the saved model or destination", () => {
+  const prefs = { recents: ["claude"], destination: "right", directories: [], models: { codex: { model: "gpt-5.5", effort: "high" } } };
+  const ui = picker(FAILED_FOLLOW_UP, { prefs, runningList: [] });
+  assert.equal(ui.evaluate("state.followUp"), null, "its agent is gone, so this is a launch now");
+  assert.equal(ui.evaluate("destination().id"), "right");
+  assert.deepEqual({ ...ui.evaluate("choice()") }, { model: "gpt-5.5", effort: "high" });
+
+  const launch = picker({ kind: "codex", prompt: "x", model: "gpt-6-sol", effort: null, destination: "down" }, { prefs });
+  assert.equal(launch.evaluate("destination().id"), "down");
+  assert.deepEqual({ ...launch.evaluate("choice()") }, { model: "gpt-6-sol", effort: null }, "a launch draft still brings its own");
+});
+
+test("esc out of a recovered follow-up takes its notice along", () => {
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(FAILED_FOLLOW_UP, { runningList: parseAgents({ agents: LISTED }) });
+  assert.match(ui.evaluate("state.notice"), /Recovered failed follow-up/);
+  ui.evaluate("onEscape()");
+  assert.equal(ui.evaluate("state.followUp"), null);
+  assert.equal(ui.evaluate("state.notice"), null);
 });
 
 test("a recovered follow-up whose agent has gone opens as a launch instead", () => {

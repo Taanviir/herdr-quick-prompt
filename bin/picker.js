@@ -97,16 +97,21 @@ function initialAgent(...wanted) {
 // The kind Enter was refused for, so that Enter again launches it anyway.
 let launchAnyway = null;
 
+// A failed follow-up's draft has no model and no destination of its own, so
+// those come from preferences rather than resetting them.
+const draftDestination = DESTINATIONS.some((d) => d.id === draft?.destination) ? draft.destination : null;
+const draftModel = draft && (draft.model !== undefined || draft.effort !== undefined);
+
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
   agent: initialAgent(duplicate?.kind, draft?.kind, prefs.recents[0]),
-  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draft?.destination ?? prefs.destination))),
+  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draftDestination ?? prefs.destination))),
   prompt: new Editor(handoff ?? draft?.prompt ?? ""),
   history: new History(readHistory()),
   cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   preset: draft?.preset ?? null,
   followUp: draft?.followUp ?? null, // the running agent Enter sends to, instead of launching
-  models: draft ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
+  models: draftModel ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
   overlay: null, // { type: "agents" | "dirs" | "presets" | "model" | "running", ... } while a picker is open
   notice: handoff ? `From ${process.env.QUICK_PROMPT_SOURCE || "another plugin"} · ⏎ launch · ctrl+r follow up instead`
     : draft?.failed ? `Recovered failed ${draft.followUp ? "follow-up" : "launch"} · edit or Enter to retry · ctrl+u clear`
@@ -802,6 +807,7 @@ function onEscape() {
 function back() {
   if (!state.followUp) return close();
   state.followUp = null;
+  state.notice = null;
   scheduleRender();
 }
 
