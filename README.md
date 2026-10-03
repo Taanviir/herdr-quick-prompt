@@ -9,8 +9,8 @@ prompt.
 - **One screen.** The cursor starts in the prompt; the agent is one keystroke away.
 - **Numbered chips** for the agents you actually have installed. Every kind Herdr
   supports is behind `ctrl+k`.
-- **New tab, a split, or a whole new workspace** — `ctrl+t` to choose, and
-  `ctrl+d` to start it somewhere other than where you are.
+- **New tab, a split, a whole new workspace, or a git worktree** — `ctrl+t` to
+  choose, and `ctrl+d` to start it somewhere other than where you are.
 - **The prompt lands before the TUI paints.** Agents whose CLI takes a prompt as
   an argument get it at launch instead of being typed into.
 - **Pasting works** — bracketed paste, unmarked bursts, and `ctrl+v` reading your
@@ -68,7 +68,7 @@ press `enter`.
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1`…`alt+9` | jump straight to a numbered agent |
 | `ctrl+k` | the full agent list, filterable by typing |
-| `ctrl+t` | destination: new tab → split right → split down → new workspace |
+| `ctrl+t` | destination: new tab → split right → split down → new workspace → new worktree |
 | `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
 | `esc` | cancel |
 
@@ -101,7 +101,7 @@ a different agent depending on what you ran last is worse than no number at all 
 so recency only decides which chip starts selected, never where it sits.
 
 `ctrl+t` cycles where the agent lands — a new tab, a split beside the pane you
-came from, or a new workspace of its own:
+came from, a new workspace of its own, or a new git worktree:
 
 ![The same popup with the destination set to split down](docs/quick-prompt-split.png)
 
@@ -114,6 +114,13 @@ complete one:
 
 A new workspace takes its name from that directory, the way Herdr names one you
 open by hand.
+
+A new worktree branches from the repository that directory belongs to, through
+`herdr worktree create`, and opens in a workspace named after the branch. The
+branch name comes from the first line of your prompt, lowercased, with hyphens
+between words and cut to 40 characters. "Fix the login bug" becomes
+`fix-the-login-bug`, or `fix-the-login-bug-2` if that branch already exists. An empty prompt gets a random name like
+`quiet-otter-hums`. Outside a git repository `ctrl+t` skips this destination.
 
 `ctrl+k` opens every kind Herdr supports, filterable by typing, with a filled dot
 against the ones installed here:
