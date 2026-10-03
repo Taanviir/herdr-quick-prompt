@@ -603,6 +603,16 @@ test("a pasted drop lands in the prompt as its copy, and the directory field get
   assert.equal(ui.evaluate("state.overlay.input.text"), pasted);
 });
 
+test("a lone esc acts at once and is kept from readline, so the next key survives", () => {
+  const ui = picker();
+  ui.evaluate("onMainKey('\\x0b', {ctrl: true, name: 'k'})");
+  assert.equal(ui.evaluate("state.overlay.type"), "agents");
+  assert.equal(ui.context.onData(Buffer.from([0x1b])), true, "readline must not see the ESC");
+  assert.equal(ui.evaluate("state.overlay"), null);
+  assert.equal(ui.context.onData(Buffer.from("x")), false);
+  assert.equal(ui.context.onData(Buffer.from("\x1b[A")), false, "an escape sequence still goes to readline");
+});
+
 test("kitty protocol keys come back as the legacy bytes readline knows", () => {
   const { legacyKeys } = require("../lib/keys");
   assert.equal(legacyKeys("\x1b[13;2u"), "\n");
