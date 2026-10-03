@@ -845,6 +845,31 @@ test("setup writes both bindings into the config file Herdr names, once", () => 
   assert.equal(fs.readFileSync(config, "utf8"), written);
 });
 
+test("the key that opens a list closes it, and esc clears a filter before closing", () => {
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(null, { runningList: parseAgents({ agents: LISTED }), presets: [{ name: "review", agent: null, prefix: "x", postfix: "", task: "ask" }] });
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex')");
+  for (const letter of ["k", "d", "o", "p", "r"]) {
+    const press = `onKey('', {ctrl: true, name: '${letter}'})`;
+    ui.evaluate(press);
+    assert.ok(ui.evaluate("state.overlay"), `ctrl+${letter} opens`);
+    ui.evaluate(press);
+    assert.equal(ui.evaluate("state.overlay"), null, `ctrl+${letter} closes`);
+  }
+  for (const letter of ["k", "p", "r"]) {
+    ui.evaluate(`onKey('', {ctrl: true, name: '${letter}'}); onKey('x', {name: 'x'})`);
+    ui.context.onData(Buffer.from([0x1b]));
+    assert.equal(ui.evaluate("state.overlay.filter"), "", `ctrl+${letter}: esc clears the filter`);
+    ui.context.onData(Buffer.from([0x1b]));
+    assert.equal(ui.evaluate("state.overlay"), null, `ctrl+${letter}: a second esc closes`);
+  }
+  ui.evaluate("onKey('', {ctrl: true, name: 'd'}); onKey('t', {name: 't'})");
+  ui.context.onData(Buffer.from([0x1b]));
+  assert.equal(ui.evaluate("state.overlay.input.text"), "");
+  ui.context.onData(Buffer.from([0x1b]));
+  assert.equal(ui.evaluate("state.overlay"), null);
+});
+
 test("ctrl+y puts back what ctrl+u cleared, at the cursor", () => {
   const ui = picker();
   ui.evaluate("state.prompt = new Editor('fix the login bug'); onMainKey('', {ctrl: true, name: 'u'})");
