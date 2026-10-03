@@ -532,6 +532,16 @@ test("launching records the prompt in history", () => {
   assert.deepEqual(recorded, ["fix the bug"]);
 });
 
+test("a paste far larger than the call stack lands whole, at the cursor", () => {
+  const { Editor } = require("../lib/editor");
+  const editor = new Editor("ab");
+  editor.move(-1);
+  editor.insert("x".repeat(500000));
+  assert.equal(editor.text.length, 500002);
+  assert.equal(editor.text.at(-1), "b");
+  assert.equal(editor.cursor, 500001);
+});
+
 test("word motion and deletion stop at whitespace from either side", () => {
   const { Editor } = require("../lib/editor");
   const editor = new Editor("fix  the bug");
