@@ -8,6 +8,7 @@ const { finishRequest } = require("../lib/state");
 const { run: herdrRun, notify, HerdrError } = require("../lib/herdr");
 const { createTiming } = require("../lib/timing");
 const { supportsInlinePrompt } = require("../lib/agents");
+const { composePrompt } = require("../lib/presets");
 
 const START_ATTEMPTS = 12;
 const START_RETRY_MS = 400;
@@ -139,7 +140,8 @@ function main() {
 
   const request = readRequest(file);
   timing = createTiming(request);
-  const { kind, prompt } = request;
+  const { kind } = request;
+  const prompt = composePrompt(request.preset, request.prompt);
 
   const name = uniqueName(kind);
   const pane = createTarget(request);
