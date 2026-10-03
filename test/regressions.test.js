@@ -60,7 +60,9 @@ test("an agent busy with its inline prompt counts as started after readiness tim
   assert.equal(calls, 2);
 });
 
-function picker(draft = null, drafts = { saved: [], cleared: 0 }, { running = null, recents = [] } = {}) {
+function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
+  running = null, recents = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
+} = {}) {
   return load("bin/picker.js", {
     "../lib/agents": {
       catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
@@ -68,6 +70,7 @@ function picker(draft = null, drafts = { saved: [], cleared: 0 }, { running = nu
       runningAgent: (pane) => (pane === "w1:p2" ? running : null),
     },
     "../lib/state": {
+      STATE_DIR: stateDir,
       readPrefs: () => ({ recents, directories: [] }),
       readDraft: () => draft,
       saveDraft: (saved) => drafts.saved.push(saved),
@@ -426,6 +429,22 @@ test("backslash-Enter, alt+Enter and ctrl+j add a newline while plain Enter laun
   assert.equal(ui.evaluate("launched"), 0);
   ui.evaluate("onMainKey('\\r', {name: 'return'})");
   assert.equal(ui.evaluate("launched"), 1);
+});
+
+test("a pasted drop lands in the prompt as its copy, and the directory field gets it as typed", (t) => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-drop-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const image = path.join(dir, "my photo.png");
+  fs.writeFileSync(image, "pixels");
+  const pasted = image.replace(/ /g, "\\ ");
+
+  const ui = picker(null, undefined, { stateDir: dir });
+  ui.evaluate(`insertPasted(${JSON.stringify(pasted)})`);
+  assert.equal(ui.evaluate("state.prompt.text"), path.join(dir, "attachments", "my-photo.png"));
+
+  ui.evaluate("openDirectories()");
+  ui.evaluate(`insertPasted(${JSON.stringify(pasted)})`);
+  assert.equal(ui.evaluate("state.overlay.input.text"), pasted);
 });
 
 test("kitty protocol keys come back as the legacy bytes readline knows", () => {

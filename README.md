@@ -14,7 +14,7 @@ prompt.
 - **The prompt lands before the TUI paints.** Agents whose CLI takes a prompt as
   an argument get it at launch instead of being typed into.
 - **Pasting works** — bracketed paste, unmarked bursts, and `ctrl+v` reading your
-  system clipboard.
+  system clipboard. Dropped screenshots are copied before macOS deletes them.
 - **No dependencies, no build step.** Just Node.
 
 ## Install
@@ -148,6 +148,17 @@ as text: bracketed paste when the terminal marks it, and a byte-count check when
 it does not. `ctrl+v` is not a terminal paste at all — the byte reaches the
 application — so the picker reads your clipboard itself through `wl-paste`,
 `xclip`, `xsel`, `pbpaste`, or PowerShell on WSL and Windows.
+
+Dropping a file onto the popup pastes its path, and some of those paths do not
+last until the agent reads them. A macOS screenshot dragged from its floating
+thumbnail lives in a `TemporaryItems` folder that macOS clears soon after, and
+its name has a narrow no-break space before `PM` that the agent types back as a
+plain one. So when a paste is nothing but paths to existing files, the picker
+copies two kinds of file to `attachments/` in the plugin state directory: any
+file under `TemporaryItems`, and any image whose path has spaces or non-ASCII
+characters. The copy gets a plain ASCII name, and the prompt gets its path.
+Every other path stays as pasted. The picker deletes copies older than a week
+the next time it makes one.
 
 New tabs are left unlabelled, so they get Herdr's ordinary numbering and the
 agent's own live title does the describing — a label frozen from your opening
