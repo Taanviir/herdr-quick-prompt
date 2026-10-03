@@ -899,6 +899,8 @@ function onMainKey(chunk, key) {
       break;
     case key.name === "escape":
       return back();
+    case key.ctrl && key.name === "l":
+      return launch(anyway, { stay: true });
     // A running agent already has its kind, its place and its directory.
     case Boolean(state.followUp) && launchControl(key):
       return;
@@ -1088,8 +1090,10 @@ const OVERLAYS = {
 
 /* ---------- launch ---------- */
 
-function launch(anyway = null) {
-  if (state.followUp) return sendFollowUp();
+// With `stay`, the agent opens without taking focus and the popup stays up
+// for the next one.
+function launch(anyway = null, { stay = false } = {}) {
+  if (state.followUp) return sendFollowUp({ stay });
 
   const chosen = agent();
   if (!chosen) return quit(0);
@@ -1121,17 +1125,28 @@ function launch(anyway = null) {
     cwd: state.cwd,
     workspace,
     pane: originPane,
+    stay,
     ...(handoff && { handoff: true }),
   });
   // Only once the request holds the prompt.
   clearDraft(draftFile);
 
   spawnDetached(process.execPath, [LAUNCHER, request]);
-  quit(0);
+  if (!stay) return quit(0);
+  ready(`${chosen.kind} is opening in a ${destination().label} · type the next one`);
+}
+
+// Ready for another, with what it was sent to still chosen.
+function ready(notice) {
+  draftFile = null;
+  state.prompt = new Editor("");
+  state.history = new History(readHistory());
+  state.notice = notice;
+  scheduleRender();
 }
 
 // A running agent is already at its prompt, so an empty one has nothing to do.
-function sendFollowUp() {
+function sendFollowUp({ stay = false } = {}) {
   if (!composePrompt(state.preset, state.prompt.text)) {
     state.notice = "type a follow-up to send";
     return scheduleRender();
@@ -1149,7 +1164,8 @@ function sendFollowUp() {
   });
   clearDraft(draftFile);
   spawnDetached(process.execPath, [LAUNCHER, request]);
-  quit(0);
+  if (!stay) return quit(0);
+  ready(`sending to ${truncate(title, 30)} · type the next one`);
 }
 
 // Not now: the prompt becomes a Scratchpad note for this directory, and the

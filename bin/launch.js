@@ -5,6 +5,7 @@
 // A follow-up skips all of that and prompts an agent that is already running.
 
 const fs = require("node:fs");
+const path = require("node:path");
 const { finishRequest, logCrash } = require("../lib/state");
 const { run: herdrRun, notify, HerdrError } = require("../lib/herdr");
 const { createTiming } = require("../lib/timing");
@@ -36,6 +37,8 @@ let timing;
 // What this launch created, and whether an agent ever started in it.
 let opened = null;
 let agentStarted = false;
+// Said once the work is done, when nothing on screen shows where it went.
+let announcement = null;
 
 function run(args, options) {
   return timing
@@ -80,8 +83,11 @@ function uniqueName(kind) {
 // Deliberately unlabelled. A label taken from the prompt is a snapshot of the
 // first second and wrong by the second minute; agents publish their own live
 // titles, and Herdr shows those.
-function createTab({ workspace, cwd }) {
-  const args = ["tab", "create", "--focus"];
+// A launch made with ctrl+l leaves you where you are.
+const focusFlag = (focus) => (focus ? "--focus" : "--no-focus");
+
+function createTab({ workspace, cwd, focus }) {
+  const args = ["tab", "create", focusFlag(focus)];
   if (workspace) args.push("--workspace", workspace);
   if (cwd) args.push("--cwd", cwd);
 
@@ -92,8 +98,8 @@ function createTab({ workspace, cwd }) {
 }
 
 // Herdr labels a workspace from its directory, which is what you want here.
-function createWorkspace({ cwd }) {
-  const args = ["workspace", "create", "--focus"];
+function createWorkspace({ cwd, focus }) {
+  const args = ["workspace", "create", focusFlag(focus)];
   if (cwd) args.push("--cwd", cwd);
 
   const { result } = run(args);
@@ -106,9 +112,9 @@ function createWorkspace({ cwd }) {
 // own. The workspace is labelled with the branch, since every worktree of one
 // repository would otherwise share its name. It is never closed again: that
 // would take the checkout with it, and work may already be in there.
-function createWorktree({ cwd, prompt, preset }) {
+function createWorktree({ cwd, prompt, preset, focus }) {
   const branch = uniqueBranch(cwd, branchName(prompt, preset));
-  const args = ["worktree", "create", "--cwd", cwd, "--branch", branch, "--label", branch, "--focus"];
+  const args = ["worktree", "create", "--cwd", cwd, "--branch", branch, "--label", branch, focusFlag(focus)];
   const base = worktreeBase(cwd);
   if (base) args.push("--base", base);
 
@@ -118,10 +124,10 @@ function createWorktree({ cwd, prompt, preset }) {
   return { pane, branch };
 }
 
-function createSplit({ pane, cwd, direction }) {
+function createSplit({ pane, cwd, direction, focus }) {
   if (!pane) throw new HerdrError("no pane to split; open Quick Prompt from a pane");
 
-  const args = ["pane", "split", pane, "--direction", direction, "--focus"];
+  const args = ["pane", "split", pane, "--direction", direction, focusFlag(focus)];
   if (cwd) args.push("--cwd", cwd);
 
   const { result } = run(args);
@@ -133,16 +139,25 @@ function createSplit({ pane, cwd, direction }) {
 // Where the agent lands: its own tab, a split beside the caller, a whole new
 // workspace, or a new worktree.
 function createTarget(request) {
+  const focus = !request.stay;
   if (request.destination === "right" || request.destination === "down") {
-    return createSplit({ pane: request.pane, cwd: request.cwd, direction: request.destination });
+    return createSplit({ pane: request.pane, cwd: request.cwd, direction: request.destination, focus });
   }
   if (request.destination === "workspace") {
-    return createWorkspace({ cwd: request.cwd });
+    return createWorkspace({ cwd: request.cwd, focus });
   }
   if (request.destination === "worktree") {
-    return createWorktree({ cwd: request.cwd, prompt: request.prompt, preset: request.preset });
+    return createWorktree({ cwd: request.cwd, prompt: request.prompt, preset: request.preset, focus });
   }
-  return createTab({ workspace: request.workspace, cwd: request.cwd });
+  return createTab({ workspace: request.workspace, cwd: request.cwd, focus });
+}
+
+const WHERE = { tab: "in a new tab", right: "in a split", down: "in a split", workspace: "in a new workspace" };
+
+function landedAt(request) {
+  if (opened.branch) return `on branch ${opened.branch}`;
+  const where = WHERE[request.destination] ?? WHERE.tab;
+  return request.cwd ? `${where} (${path.basename(request.cwd)})` : where;
 }
 
 // A freshly created tab may not be at its interactive prompt yet, and
@@ -212,6 +227,7 @@ function main() {
   }
   if (!started.started) throw new HerdrError(started.message);
   agentStarted = true;
+  if (request.stay) announcement = `${kind} started ${landedAt(request)}`;
 
   // Delivered at launch: nothing left to type.
   if (delivered || !prompt) return;
@@ -249,6 +265,7 @@ function followUp({ target, title }, prompt) {
   if (!sent.ok) {
     throw failure(`${title} did not take the follow-up: ${sent.message}`, `follow-up not taken: ${sent.message}`);
   }
+  announcement = `sent to ${title}`;
 }
 
 function agentState(pane) {
@@ -286,6 +303,7 @@ try {
   main();
   timing?.finish(true);
   finishRequest(process.argv[2], true);
+  if (announcement) notify("Quick Prompt", announcement, "none");
 } catch (error) {
   // A HerdrError is Herdr saying no, and startup.jsonl has it. Anything else
   // is a bug here.
