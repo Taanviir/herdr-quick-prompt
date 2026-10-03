@@ -378,7 +378,10 @@ function runningBody(inner, rows) {
   const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
 
   list.slice(start, start + room).forEach((entry, index) => {
-    const detail = `${entry.kind} · ${entry.status} · ${shortenPath(entry.cwd, 20)} `;
+    // The title is what tells agents apart, so the path gives way first.
+    const status = `${entry.kind} · ${entry.status} `;
+    const pathRoom = Math.min(20, inner - displayWidth(status) - Math.min(displayWidth(entry.title), 24) - 6);
+    const detail = pathRoom >= 8 ? `${status}· ${shortenPath(entry.cwd, pathRoom)} ` : status;
     const name = pad(truncate(` ${entry.title}`, inner - displayWidth(detail) - 2), inner - displayWidth(detail));
     const plain = entry.status === "blocked" ? style.warn(detail) : style.dim(detail);
     lines[1 + index] = start + index === active ? style.selected(name + detail) : name + plain;
