@@ -150,7 +150,7 @@ Everything lives in the plugin state directory, normally
 | `history.json` | your last 50 prompts, as plain text; delete it to forget them |
 | `draft-*.json` | unsent and failed prompts, one per file, dropped after a day |
 | `attachments/` | copied screenshots, deleted after a week |
-| `startup.jsonl` | launch timings, without prompt text |
+| `startup.jsonl` | launch timings, and why a launch failed, without prompt text |
 | `crash.log` | errors from the popup |
 
 ## From other plugins
