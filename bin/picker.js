@@ -113,6 +113,17 @@ const state = {
     : draft ? "Restored draft · ctrl+u clear" : null,
 };
 
+// A restored follow-up names a pane that may have closed since, or now runs
+// another agent. When Herdr cannot say, keep it: the worker will find out.
+if (state.followUp) {
+  const live = runningAgents();
+  const { target, kind, title } = state.followUp;
+  if (live && !live.some((entry) => entry.target === target && entry.kind === kind)) {
+    state.followUp = null;
+    state.notice = `${truncate(title, 24)} is no longer running · ⏎ launches a new ${kind}`;
+  }
+}
+
 // Every cell inside the popup has to be written: cells this never paints show
 // whatever was on the screen behind it.
 const GUTTER = 1;
@@ -285,7 +296,8 @@ function followUpWhere(inner) {
 }
 
 function openRunning() {
-  state.overlay = { type: "running", filter: "", index: 0, agents: runningAgents() };
+  const listed = runningAgents();
+  state.overlay = { type: "running", filter: "", index: 0, agents: listed ?? [], unanswered: !listed };
 }
 
 function runningMatches() {
@@ -301,7 +313,8 @@ function runningBody(inner, rows) {
     : style.dim("running agent");
 
   if (list.length === 0) {
-    lines[1] = style.warn(state.overlay.agents.length ? "no running agent matches that filter" : "no agents are running");
+    lines[1] = style.warn(state.overlay.unanswered ? "herdr did not answer · esc and try again"
+      : state.overlay.agents.length ? "no running agent matches that filter" : "no agents are running");
     lines[rows - 1] = style.dim("esc back");
     return { lines, caret: null };
   }
