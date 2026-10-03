@@ -896,7 +896,7 @@ function onMainKey(chunk, key) {
     // Up and down walk the prompt's own lines first and history only past its
     // top and bottom, so a multi-line prompt stays editable.
     case key.name === "up":
-      if (!prompt.moveVertical(-1, content() - 2)) recall(state.history.older(prompt.text));
+      if (!prompt.moveVertical(-1, content() - 2)) recall(state.history.older(snapshot()));
       break;
     case key.name === "down":
       if (!prompt.moveVertical(1, content() - 2)) recall(state.history.newer());
@@ -974,8 +974,21 @@ function launchControl(key) {
     || (key.meta && /^[1-9]$/.test(key.name ?? ""));
 }
 
-function recall(text) {
-  if (text !== null) state.prompt = new Editor(text);
+// What is on screen, in the shape of a history entry.
+function snapshot() {
+  return { text: state.prompt.text, kind: agent().kind, preset: state.preset?.name ?? null, model: choice() };
+}
+
+// A running agent keeps its own kind and model, so a follow-up takes the text
+// and the preset only.
+function recall(entry) {
+  if (!entry) return;
+  state.prompt = new Editor(entry.text);
+  state.preset = presets.find((item) => item.name === entry.preset) ?? null;
+  if (state.followUp) return;
+  const at = agents.findIndex((item) => item.kind === entry.kind);
+  if (at >= 0) state.agent = at;
+  if (entry.model && modelsFor(entry.kind)) state.models[entry.kind] = entry.model;
 }
 
 // Plain \r launches. \n is ctrl+j, or shift+enter and ctrl+enter as
@@ -1118,7 +1131,7 @@ function launch(anyway = null, { stay = false } = {}) {
   }
 
   remember(chosen.kind, destination().id, state.cwd);
-  recordPrompt(state.prompt.text);
+  recordPrompt({ text: state.prompt.text, kind: chosen.kind, preset: state.preset?.name ?? null, model: choice() });
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
@@ -1156,7 +1169,7 @@ function sendFollowUp({ stay = false } = {}) {
     return scheduleRender();
   }
   const { target, title, kind, cwd } = state.followUp;
-  recordPrompt(state.prompt.text);
+  recordPrompt({ text: state.prompt.text, preset: state.preset?.name ?? null });
   const request = writeRequest({
     submittedAt: Date.now(),
     kind,
@@ -1186,7 +1199,7 @@ function saveNote() {
     if (!saved.ok) {
       state.notice = `not saved: ${saved.message}`;
     } else {
-      recordPrompt(text);
+      recordPrompt({ text, kind: agent().kind, preset: state.preset?.name ?? null, model: choice() });
       clearDraft(draftFile);
       notify("Quick Prompt", `Saved to Scratchpad: ${saved.message}`, "done");
       return quit(0);
