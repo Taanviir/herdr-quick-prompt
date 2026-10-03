@@ -459,3 +459,32 @@ test("model flags go ahead of the inline prompt and survive falling back to typi
     else assert.deepEqual(starts, [flags]);
   }
 });
+
+test("ctrl+o picks a model and effort for the selected agent only", () => {
+  const { displayWidth } = require("../lib/text");
+  const ui = picker();
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex')");
+  assert.match(ui.evaluate("destinationRow(71)"), /default model/);
+  ui.evaluate("onMainKey('\\x0f', {ctrl: true, name: 'o'})");
+  assert.equal(ui.evaluate("state.overlay.type"), "model");
+  ui.evaluate("onModelKey('', {name: 'down'}); onModelKey('', {name: 'right'}); onModelKey('', {name: 'right'})");
+  assert.equal(ui.evaluate("state.overlay.effort"), "medium");
+  for (let i = 0; i < 4; i += 1) ui.evaluate("onModelKey('', {name: 'right'})");
+  assert.equal(ui.evaluate("state.overlay.effort"), "ultra");
+  ui.evaluate("onModelKey('', {name: 'down'}); onModelKey('', {name: 'down'}); onModelKey('', {name: 'down'})");
+  assert.equal(ui.evaluate("state.overlay.effort"), null, "gpt-6-luna has no ultra");
+  ui.evaluate("onModelKey('', {name: 'up'}); onModelKey('', {name: 'right'}); onModelKey('\\r', {name: 'return'})");
+  assert.deepEqual({ ...ui.evaluate("choice()") }, { model: "gpt-6-sol", effort: "low" });
+
+  ui.evaluate("state.destination = 1; state.cwd = '/home/someone/projects/a-rather-long-project-name'");
+  const row = ui.evaluate("destinationRow(71)");
+  assert.match(row, /gpt-6-sol · low/);
+  assert.ok(displayWidth(row) <= 71, "a long model name must not push the row past the popup");
+
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'claude')");
+  assert.match(ui.evaluate("destinationRow(71)"), /default model/, "each kind keeps its own choice");
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'gemini'); onMainKey('\\x0f', {ctrl: true, name: 'o'})");
+  assert.equal(ui.evaluate("state.overlay"), null);
+  assert.match(ui.evaluate("state.notice"), /no model choice for gemini/);
+  assert.doesNotMatch(ui.evaluate("destinationRow(71)"), /model/);
+});

@@ -34,6 +34,7 @@ testing the published copy.
 | `bin/launch.js` | Detached worker: creates the tab or split, starts the agent, delivers the prompt |
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
 | `lib/agents.js` | Agent catalog, `PATH` detection, which kinds take an inline prompt |
+| `lib/models.js` | Models and efforts per kind for `ctrl+o`, and the launch flags they become |
 | `lib/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
 | `lib/text.js` | Terminal-cell width and paste sanitising |
 | `lib/ui.js` | Colours, padding, truncation, path shortening |
