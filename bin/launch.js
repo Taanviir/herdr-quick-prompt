@@ -182,9 +182,9 @@ function main() {
   // an `agent start` that times out may never have registered the name.
   const pane = createTarget(request);
 
-  // Herdr refuses a launch argument with a newline in it, so multiline prompts
-  // are typed in instead.
-  const inline = prompt && !prompt.includes("\n") && supportsInlinePrompt(kind) ? prompt : null;
+  // Herdr refuses a launch argument with a newline in it, and the agent's CLI
+  // would read one starting with a dash as an option, so those are typed in.
+  const inline = prompt && !prompt.includes("\n") && !prompt.startsWith("-") && supportsInlinePrompt(kind) ? prompt : null;
   timing?.note({ inline: Boolean(inline) });
   const options = modelArgs(kind, request);
   let delivered = Boolean(inline);
