@@ -103,6 +103,13 @@ test("an inline prompt gets a short start timeout, and a timeout there means it 
   assert.deepEqual({ ...records[0] }, { inline: true });
 });
 
+test("a prompt starting with a dash is typed in rather than handed to the CLI as an option", () => {
+  const { calls } = timedOutLaunch("--help me with the build");
+  const starts = calls.filter((args) => args[1] === "start");
+  assert.equal(starts[0].includes("--help me with the build"), false);
+  assert.ok(calls.some((args) => args[1] === "prompt" && args[3] === "--help me with the build"));
+});
+
 test("a failed launch records why in startup.jsonl, without the prompt or the agent's title", () => {
   const records = [];
   const followUp = load("bin/launch.js", {
