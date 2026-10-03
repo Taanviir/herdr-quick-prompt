@@ -19,7 +19,7 @@ const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest,
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
-const { stage } = require("../lib/dropped");
+const { stage, prune } = require("../lib/dropped");
 const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 const { modelsFor, effortsFor, normalize, modelLabel } = require("../lib/models");
@@ -1187,3 +1187,6 @@ process.stdin.setRawMode(true);
 process.stdin.resume();
 out.on("resize", render);
 render();
+// Copies are only pruned on a drop otherwise, and someone who stops dropping
+// screenshots would keep the last week's for ever. Not before the first paint.
+setImmediate(() => prune(ATTACHMENTS));

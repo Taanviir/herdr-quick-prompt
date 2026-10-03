@@ -879,6 +879,43 @@ test("a lone esc acts at once and is kept from readline, so the next key survive
   assert.equal(ui.context.onData(Buffer.from("\x1b[A")), false, "an escape sequence still goes to readline");
 });
 
+test("opening the popup prunes old attachments once it has painted", () => {
+  const { dir, api } = stateIn("qp-boot-test-");
+  const attachments = path.join(dir, "attachments");
+  fs.mkdirSync(attachments);
+  const old = path.join(attachments, "old.png");
+  const fresh = path.join(attachments, "fresh.png");
+  fs.writeFileSync(old, "x");
+  fs.writeFileSync(fresh, "x");
+  const weekAgo = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(old, weekAgo, weekAgo);
+
+  const file = path.resolve(__dirname, "../bin/picker.js");
+  const realRequire = createRequire(file);
+  const mocks = {
+    "../lib/state": api,
+    "../lib/agents": { catalog: () => [{ kind: "claude", installed: true }], runningAgent: () => null },
+    "../lib/herdr": { spawnDetached() {}, notify() {} },
+  };
+  const later = [];
+  const painted = [];
+  const tty = { isTTY: true, on() {}, setRawMode() {}, resume() {} };
+  const context = vm.createContext({
+    require: (name) => mocks[name] ?? realRequire(name),
+    module: { exports: {} },
+    __dirname: path.dirname(file),
+    process: { env: { QUICK_PROMPT_CWD: "/tmp" }, stdin: tty, stdout: { write: (text) => painted.push(text), on() {} }, on() {} },
+    setImmediate: (fn) => later.push(fn),
+    Buffer,
+  });
+  vm.runInContext(fs.readFileSync(file, "utf8"), context);
+  assert.ok(painted.length > 0);
+  assert.equal(fs.existsSync(old), true, "nothing slows the first paint");
+  later.forEach((fn) => fn());
+  assert.equal(fs.existsSync(old), false);
+  assert.equal(fs.existsSync(fresh), true);
+});
+
 test("kitty protocol keys come back as the legacy bytes readline knows", () => {
   const { legacyKeys } = require("../lib/keys");
   assert.equal(legacyKeys("\x1b[13;2u"), "\n");
