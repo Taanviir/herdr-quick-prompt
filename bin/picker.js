@@ -143,8 +143,15 @@ const height = () => Math.max(8, out.rows ?? 12);
 const content = () => Math.max(28, width() - GUTTER * 2);
 const agent = () => agents[state.agent];
 const destination = () => DESTINATIONS[state.destination];
-// null for a kind with no model picker.
-const choice = () => (modelsFor(agent().kind) ? normalize(agent().kind, state.models[agent().kind]) : null);
+// null for a kind with no model picker. A preset's model holds for its own
+// agent, or for any when it names none, until one is picked with ctrl+o.
+function choice() {
+  const kind = agent().kind;
+  if (!modelsFor(kind)) return null;
+  const preset = state.preset;
+  const fromPreset = preset && !state.modelPicked && (preset.model || preset.effort) && (!preset.agent || preset.agent === kind);
+  return normalize(kind, fromPreset ? preset : state.models[kind]);
+}
 
 // The chip row is the agents you actually have, plus whatever is selected. The
 // other twenty kinds Herdr knows about are noise until you go looking (ctrl+k).
@@ -526,6 +533,7 @@ function onModelKey(chunk, key) {
     case key.name === "return" || key.name === "enter":
       state.models[overlay.kind] = { model: models[overlay.index], effort: overlay.effort };
       rememberModel(overlay.kind, state.models[overlay.kind]);
+      state.modelPicked = true;
       state.overlay = null;
       break;
     default:
@@ -550,11 +558,11 @@ function presetsBody(inner, rows) {
     : style.dim("preset");
 
   // A broken entry is skipped, so say which one rather than let it vanish.
-  let footer = rows - 1;
+  let footer = rows - 2;
   if (presetProblems.length) {
     const more = presetProblems.length > 1 ? ` (+${presetProblems.length - 1} more)` : "";
-    lines[rows - 2] = style.warn(`${presetProblems[0]}${more}`);
-    footer = rows - 2;
+    lines[rows - 3] = style.warn(`${presetProblems[0]}${more}`);
+    footer = rows - 3;
   }
 
   if (presets.length === 0) {
@@ -572,22 +580,37 @@ function presetsBody(inner, rows) {
   const room = footer - 1;
   const active = Math.min(state.overlay.index, list.length - 1);
   const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
-  const detailWidth = 18;
+  const detailWidth = Math.min(30, Math.max(10, inner - 30));
   const nameWidth = Math.max(10, inner - detailWidth - 5);
 
   list.slice(start, start + room).forEach((item, index) => {
     const at = start + index;
     const name = pad(truncate(item.name, nameWidth), nameWidth);
-    const detail = style.dim(pad(truncate([item.agent && `${item.agent}${missing(item.agent)}`, item.task === "skip" ? "skip" : null]
-      .filter(Boolean).join(" · "), detailWidth), detailWidth));
+    const model = (item.model || item.effort) && [item.model, item.effort].filter(Boolean).join(" ");
+    const parts = [item.agent && `${item.agent}${missing(item.agent)}`, model, item.destination, item.task === "skip" ? "skip" : null];
+    const detail = style.dim(pad(truncate(parts.filter(Boolean).join(" · "), detailWidth), detailWidth));
     const mark = item.name === state.preset?.name ? style.ok("●") : " ";
     lines[1 + index] = at === active
       ? `${style.selected(` ${name}`)} ${detail} ${mark}`
       : ` ${name} ${detail} ${mark}`;
   });
 
+  lines[rows - 2] = presetPreview(list[active], inner);
   lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ apply, again to remove · esc back");
   return { lines, caret: null };
+}
+
+// What the highlighted preset sends, with your prompt in the middle.
+function presetPreview(preset, inner) {
+  const flat = (text) => text.replace(/\s+/g, " ").trim();
+  const prefix = flat(preset.prefix);
+  const postfix = flat(preset.postfix);
+  const middle = "‹prompt›";
+  const room = inner - displayWidth(middle) - 2;
+  const postWidth = Math.min(displayWidth(postfix), Math.max(Math.floor(room / 2), room - displayWidth(prefix)));
+  const before = prefix ? `${truncate(prefix, room - postWidth)} ` : "";
+  const after = postfix ? ` ${truncate(postfix, postWidth)}` : "";
+  return style.dim(before) + style.accent(middle) + style.dim(after);
 }
 
 function openPresets() {
@@ -605,6 +628,7 @@ function applyPreset(preset) {
     return;
   }
   state.preset = preset;
+  state.modelPicked = false;
   if (state.followUp) return;
   if (preset.agent) {
     const index = agents.findIndex((item) => item.kind === preset.agent);
@@ -614,6 +638,11 @@ function applyPreset(preset) {
     }
     state.agent = index;
   }
+  if (preset.destination === "worktree" && !insideRepo(state.cwd)) {
+    state.notice = `preset ${preset.name}: no worktree outside a git repository`;
+    return;
+  }
+  if (preset.destination) state.destination = DESTINATIONS.findIndex((d) => d.id === preset.destination);
   if (preset.task === "skip" && state.prompt.isEmpty) launch();
 }
 
@@ -1163,7 +1192,8 @@ function launch(anyway = null, { stay = false } = {}) {
     return scheduleRender();
   }
 
-  remember(chosen.kind, destination().id, state.cwd);
+  // A preset's destination is the preset's, not a new default.
+  remember(chosen.kind, state.preset?.destination === destination().id ? null : destination().id, state.cwd);
   recordPrompt({ text: state.prompt.text, kind: chosen.kind, preset: state.preset?.name ?? null, model: choice() });
   const request = writeRequest({
     submittedAt: Date.now(),
