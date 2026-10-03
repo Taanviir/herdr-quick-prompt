@@ -170,18 +170,16 @@ function render() {
   const rows = height();
   const body = state.overlay ? OVERLAYS[state.overlay.type].body(inner, rows) : mainBody(inner, rows);
 
+  // Every row covers the full width, so nothing from the last frame survives
+  // and there is no need to clear the screen first.
+  const gutter = " ".repeat(GUTTER);
   const painted = [];
   for (let row = 0; row < rows; row += 1) {
-    painted.push(" ".repeat(GUTTER) + pad(truncate(body.lines[row] ?? "", inner), inner));
+    painted.push(gutter + pad(truncate(body.lines[row] ?? "", inner), inner) + gutter);
   }
 
-  out.write(`\x1b[2J\x1b[H${painted.join("\r\n")}`);
-
-  if (body.caret) {
-    out.write(`\x1b[${body.caret.row + 1};${GUTTER + body.caret.col + 1}H\x1b[?25h`);
-  } else {
-    out.write("\x1b[?25l");
-  }
+  const cursor = body.caret ? `\x1b[${body.caret.row + 1};${GUTTER + body.caret.col + 1}H\x1b[?25h` : "\x1b[?25l";
+  out.write(`\x1b[H${painted.join("\r\n")}${cursor}`);
 }
 
 function mainBody(inner, rows) {
