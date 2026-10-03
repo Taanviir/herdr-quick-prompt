@@ -1695,6 +1695,7 @@ test("a follow-up goes to the chosen agent, and esc backs out one step at a time
   assert.equal(ui.evaluate("state.agent"), agentBefore, "the agent is fixed in a follow-up");
   assert.equal(ui.evaluate("destination().id"), "tab");
   assert.equal(ui.evaluate("state.overlay"), null);
+  assert.equal(ui.evaluate("state.notice"), "following up · esc to launch a new agent instead", "the key is not just ignored");
 
   ui.evaluate("onMainKey('\\r', {name: 'return'})");
   assert.equal(requests.length, 0, "an empty follow-up is not sent");

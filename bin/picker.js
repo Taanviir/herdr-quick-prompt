@@ -965,7 +965,8 @@ function onMainKey(chunk, key) {
       return launch(anyway, { stay: true });
     // A running agent already has its kind, its place and its directory.
     case Boolean(state.followUp) && launchControl(key):
-      return;
+      state.notice = "following up · esc to launch a new agent instead";
+      break;
     case isNewline(chunk, key):
       prompt.insert("\n");
       break;
