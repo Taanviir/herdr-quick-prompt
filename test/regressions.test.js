@@ -8,14 +8,14 @@ const { createRequire } = require("node:module");
 const { test } = require("node:test");
 
 // Exercise entrypoint handlers without starting a terminal, agent, or server.
-function load(relative, mocks = {}, stop) {
+function load(relative, mocks = {}, stop, env = {}) {
   const file = path.resolve(__dirname, "..", relative);
   const realRequire = createRequire(file);
   const context = vm.createContext({
     require: (name) => mocks[name] ?? realRequire(name),
     module: { exports: {} },
     __dirname: path.dirname(file),
-    process: { env: { QUICK_PROMPT_CWD: "/tmp" }, stdout: { write() {} } },
+    process: { env: { QUICK_PROMPT_CWD: "/tmp", ...env }, stdout: { write() {} } },
     setImmediate() {},
   });
   const source = fs.readFileSync(file, "utf8");
@@ -60,12 +60,15 @@ test("an agent busy with its inline prompt counts as started after readiness tim
   assert.equal(calls, 2);
 });
 
-function picker(recovered = null, discarded = []) {
+function picker(recovered = null, discarded = [], { running = null, recents = [] } = {}) {
   return load("bin/picker.js", {
-    "../lib/agents": { catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
-      .map((kind) => ({ kind, installed: false })) },
+    "../lib/agents": {
+      catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
+        .map((kind) => ({ kind, installed: false })),
+      runningAgent: (pane) => (pane === "w1:p2" ? running : null),
+    },
     "../lib/state": {
-      readPrefs: () => ({ recents: [], directories: [] }),
+      readPrefs: () => ({ recents, directories: [] }),
       readFailedRequest: () => recovered,
       discardRequest: (file) => discarded.push(file),
       sweepStaleRequests: () => {},
@@ -76,7 +79,7 @@ function picker(recovered = null, discarded = []) {
       complete: () => ["/tmp/child"],
       suggestions: () => [],
     },
-  }, "/* ---------- boot ---------- */");
+  }, "/* ---------- boot ---------- */", running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {});
 }
 
 test("an agent outside the first five remains selected and visible", () => {
@@ -451,4 +454,22 @@ test("looking up the running agent is bounded and gives up quietly", () => {
   calls.length = 0;
   assert.equal(lookup({ ok: true, result: {} })(undefined), null);
   assert.equal(calls.length, 0, "no origin pane means nothing to ask");
+});
+
+test("duplicate selects the focused pane's agent and directory over recency and a draft", () => {
+  const ui = picker(null, [], { running: { kind: "codex", cwd: "/work/tree" }, recents: ["gemini"] });
+  assert.equal(ui.evaluate("agent().kind"), "codex");
+  assert.equal(ui.evaluate("state.cwd"), "/work/tree");
+
+  const recovered = { file: "/tmp/failed-request-1-1.json", request: { kind: "amp", prompt: "x", cwd: "/old" } };
+  const withDraft = picker(recovered, [], { running: { kind: "cursor", cwd: "/work/tree" } });
+  assert.equal(withDraft.evaluate("agent().kind"), "cursor");
+  assert.equal(withDraft.evaluate("state.cwd"), "/work/tree");
+  assert.equal(withDraft.evaluate("state.prompt.text"), "x", "the draft's prompt is still recovered");
+
+  const unknown = picker(null, [], { running: { kind: "someday", cwd: null }, recents: ["gemini"] });
+  assert.equal(unknown.evaluate("agent().kind"), "gemini", "a kind the catalog lacks falls back to recency");
+  assert.equal(unknown.evaluate("state.cwd"), "/tmp");
+
+  assert.equal(picker(null, [], { recents: ["gemini"] }).evaluate("agent().kind"), "gemini");
 });
