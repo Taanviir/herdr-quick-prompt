@@ -62,6 +62,7 @@ test("an agent busy with its inline prompt counts as started after readiness tim
 
 function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
   running = null, runningList = [], requests = [], recents = [], history = [], presets = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
+  env = {},
 } = {}) {
   return load("bin/picker.js", {
     "../lib/presets": {
@@ -95,7 +96,7 @@ function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
       suggestions: () => [],
     },
     "../lib/worktree": { insideRepo: (dir) => dir === "/repo" },
-  }, "/* ---------- boot ---------- */", running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {});
+  }, "/* ---------- boot ---------- */", { ...(running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {}), ...env });
 }
 
 test("ctrl+t offers a worktree only inside a git repository, and launch refuses one outside", () => {
@@ -752,6 +753,23 @@ test("looking up the running agent is bounded and gives up quietly", () => {
   calls.length = 0;
   assert.equal(lookup({ ok: true, result: {} })(undefined), null);
   assert.equal(calls.length, 0, "no origin pane means nothing to ask");
+});
+
+test("a prompt handed over by another plugin fills the box and leaves the draft alone", () => {
+  const drafts = { saved: [], cleared: 0 };
+  const requests = [];
+  const draft = { kind: "amp", prompt: "my own half-typed thing", cwd: "/old" };
+  const ui = picker(draft, drafts, { requests, env: { QUICK_PROMPT_TEXT: "From my scratchpad:\n- [a1] fix it", QUICK_PROMPT_SOURCE: "Scratchpad" } });
+  assert.equal(ui.evaluate("state.prompt.text"), "From my scratchpad:\n- [a1] fix it");
+  assert.equal(ui.evaluate("state.cwd"), "/tmp", "the draft's directory is not restored either");
+  assert.match(ui.evaluate("state.notice"), /^From Scratchpad/);
+
+  ui.evaluate("quit = () => {}; close()");
+  assert.deepEqual(drafts, { saved: [], cleared: 0 }, "closing neither saves the handoff nor clears the draft");
+
+  ui.evaluate("launch()");
+  assert.equal(drafts.cleared, 0, "launching does not clear the draft");
+  assert.equal(requests.at(-1).prompt, "From my scratchpad:\n- [a1] fix it");
 });
 
 test("duplicate selects the focused pane's agent and directory over recency and a draft", () => {

@@ -60,7 +60,11 @@ const prefs = readPrefs();
 const agents = catalog();
 const { presets, problems: presetProblems } = readPresets();
 sweepStaleRequests();
-const draft = readDraft();
+// Another plugin can open the picker with the prompt already written, as
+// Scratchpad does with notes. A handed-over prompt never touches the draft:
+// it did not come from this box, and the one you left here stays for later.
+const handoff = process.env.QUICK_PROMPT_TEXT || null;
+const draft = handoff ? null : readDraft();
 // Cleared once the draft has been thrown away, so the notice says so only once.
 let restored = Boolean(draft);
 // The duplicate action starts from the agent in the pane you came from, which
@@ -93,14 +97,15 @@ const state = {
   // Recency decides which chip starts selected; it never moves the chips.
   agent: initialAgent(duplicate?.kind, draft?.kind, prefs.recents[0]),
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draft?.destination ?? prefs.destination))),
-  prompt: new Editor(draft?.prompt ?? ""),
+  prompt: new Editor(handoff ?? draft?.prompt ?? ""),
   history: new History(readHistory()),
   cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   preset: draft?.preset ?? null,
   followUp: draft?.followUp ?? null, // the running agent Enter sends to, instead of launching
   models: draft ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
   overlay: null, // { type: "agents" | "dirs" | "presets" | "model" | "running", ... } while a picker is open
-  notice: draft?.failed ? `Recovered failed ${draft.followUp ? "follow-up" : "launch"} · edit or Enter to retry · ctrl+u clear`
+  notice: handoff ? `From ${process.env.QUICK_PROMPT_SOURCE || "another plugin"} · ⏎ launch · ctrl+r follow up instead`
+    : draft?.failed ? `Recovered failed ${draft.followUp ? "follow-up" : "launch"} · edit or Enter to retry · ctrl+u clear`
     : draft ? "Restored draft · ctrl+u clear" : null,
 };
 
@@ -1013,7 +1018,7 @@ function launch() {
   remember(chosen.kind, destination().id, state.cwd, choice());
   recordPrompt(state.prompt.text);
   // Before the worker exists, so a failure it records is never wiped by this.
-  clearDraft();
+  if (!handoff) clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
@@ -1038,7 +1043,7 @@ function sendFollowUp() {
   }
   const { target, title, kind, cwd } = state.followUp;
   recordPrompt(state.prompt.text);
-  clearDraft();
+  if (!handoff) clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind,
@@ -1053,6 +1058,7 @@ function sendFollowUp() {
 
 // Closing keeps what you typed for next time; closing an empty box forgets it.
 function close() {
+  if (handoff) return quit(0);
   if (!state.prompt.text.trim()) {
     clearDraft();
     return quit(0);
