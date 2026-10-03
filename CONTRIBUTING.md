@@ -27,20 +27,20 @@ testing the published copy.
 
 | File | Role |
 | --- | --- |
-| `herdr-plugin.toml` | Manifest: the `open` and `setup` actions, and the `picker` popup pane |
+| `herdr-plugin.toml` | Manifest: the `open`, `duplicate` and `setup` actions, and the `picker` popup pane |
 | `bin/open.js` | Resolves the caller's location and opens the popup |
 | `bin/setup.js` | Writes the keybinding into the user's `config.toml` |
 | `bin/picker.js` | The modal TUI: rendering, keys, paste |
 | `bin/launch.js` | Detached worker: creates the tab or split, starts the agent, delivers the prompt |
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
-| `lib/agents.js` | Agent catalog, `PATH` detection, which kinds take an inline prompt |
+| `lib/agents.js` | Agent catalog, `PATH` detection, which kinds take an inline prompt, the agent running in a pane |
 | `lib/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
 | `lib/text.js` | Terminal-cell width and paste sanitising |
 | `lib/ui.js` | Colours, padding, truncation, path shortening |
 | `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
 | `lib/dropped.js` | Copying dropped files that would not survive until the agent reads them |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
-| `lib/state.js` | Preferences and launch requests under `HERDR_PLUGIN_STATE_DIR` |
+| `lib/state.js` | Preferences, launch requests and the draft under `HERDR_PLUGIN_STATE_DIR` |
 
 ## Things that will bite you
 
