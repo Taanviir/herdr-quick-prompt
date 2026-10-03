@@ -1707,6 +1707,76 @@ test("a remembered worktree outside a repository opens on a new tab", () => {
   assert.equal(inRepo.evaluate("destination().id"), "worktree", "a draft made in a repository keeps it");
 });
 
+test("ctrl+l launches without leaving the popup, ready for the next prompt", () => {
+  const requests = [];
+  const ui = picker(null, { requests });
+  ui.evaluate("quits = 0; quit = () => { quits += 1 }");
+  ui.evaluate("state.prompt = new Editor('first job'); onMainKey('\\x0c', {ctrl: true, name: 'l'})");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].stay, true);
+  assert.equal(ui.evaluate("quits"), 0);
+  assert.equal(ui.evaluate("state.prompt.text"), "");
+  assert.match(ui.evaluate("state.notice"), /claude is opening in a new tab/);
+  ui.evaluate("onMainKey('', {name: 'up'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "first job", "it is in history already");
+
+  ui.evaluate("state.prompt = new Editor('second job'); onMainKey('\\r', {name: 'return'})");
+  assert.equal(requests[1].stay, false);
+  assert.equal(ui.evaluate("quits"), 1);
+});
+
+// The calls and notifications of a launch of `request` that goes through.
+function launchOf(request) {
+  const calls = [];
+  const notifications = [];
+  const launcher = load("bin/launch.js", {
+    "node:fs": { readFileSync: () => JSON.stringify(request) },
+    "../lib/state": { finishRequest: () => {} },
+    "../lib/timing": { createTiming: () => null },
+    "../lib/agents": { supportsInlinePrompt: () => true },
+    "../lib/worktree": { branchName: () => "fix-it", uniqueBranch: (_, name) => name, worktreeBase: () => null },
+    "../lib/herdr": {
+      HerdrError: Error,
+      notify: (...args) => notifications.push(args),
+      run: (args) => {
+        calls.push(args);
+        if (args[0] === "tab" || args[0] === "worktree") return { ok: true, result: { tab: { tab_id: "w1:t2" }, root_pane: { pane_id: "w1:p5" } } };
+        if (args[0] === "pane") return { ok: true, result: { pane: { pane_id: "w1:p6" } } };
+        return { ok: true, result: {} };
+      },
+    },
+  }, "try {\n  main();");
+  launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  launcher.context.process.exit = () => {};
+  const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
+  launcher.evaluate(source.slice(source.indexOf("try {\n  main();")));
+  return { calls, notifications };
+}
+
+test("a launch that stays opens without focus and says where it went", () => {
+  const created = ({ calls }) => calls.find((args) => args[1] === "create" || args[1] === "split");
+  const quiet = launchOf({ kind: "claude", prompt: "fix it", destination: "tab", cwd: "/work/alpha" });
+  assert.ok(created(quiet).includes("--focus"));
+  assert.deepEqual(quiet.notifications, [], "you are looking at it already");
+
+  const stayed = launchOf({ kind: "claude", prompt: "fix it", destination: "tab", cwd: "/work/alpha", stay: true });
+  assert.ok(created(stayed).includes("--no-focus"));
+  assert.ok(!created(stayed).includes("--focus"));
+  assert.deepEqual(stayed.notifications.map((args) => [...args]), [["Quick Prompt", "claude started in a new tab (alpha)", "none"]]);
+
+  for (const destination of ["right", "workspace", "worktree"]) {
+    const other = launchOf({ kind: "codex", prompt: "fix it", destination, cwd: "/repo", pane: "w1:p1", stay: true });
+    assert.ok(created(other).includes("--no-focus"), destination);
+  }
+  const branch = launchOf({ kind: "codex", prompt: "fix it", destination: "worktree", cwd: "/repo", stay: true });
+  assert.equal(branch.notifications[0][1], "codex started on branch fix-it");
+});
+
+test("a follow-up that lands says so quietly", () => {
+  const { notifications } = launchOf({ kind: "codex", prompt: "and the docs", followUp: { target: "w1:p2", title: "Fix the build", kind: "codex" } });
+  assert.deepEqual(notifications.map((args) => [...args]), [["Quick Prompt", "sent to Fix the build", "none"]]);
+});
+
 test("a model picked with ctrl+o is kept even when the popup closes without launching", () => {
   const ui = picker();
   ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex'); openModels()");
