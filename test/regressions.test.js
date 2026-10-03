@@ -61,9 +61,14 @@ test("an agent busy with its inline prompt counts as started after readiness tim
 });
 
 function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
-  running = null, recents = [], history = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
+  running = null, recents = [], history = [], presets = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
 } = {}) {
   return load("bin/picker.js", {
+    "../lib/presets": {
+      PRESETS: "/tmp/presets.json",
+      readPresets: () => ({ presets, problems: [] }),
+      composePrompt: require("../lib/presets").composePrompt,
+    },
     "../lib/agents": {
       catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
         .map((kind) => ({ kind, installed: false })),
@@ -234,7 +239,7 @@ test("esc keeps a typed prompt as the draft, and an empty box forgets it", () =>
   ui.evaluate("quit = () => {}");
   ui.evaluate("state.agent = 2; state.destination = 1; state.cwd = '/tmp/child'; state.prompt = new Editor('half a thought')");
   ui.evaluate('onMainKey("", { name: "escape" })');
-  assert.deepEqual(JSON.parse(JSON.stringify(drafts.saved)), [{ kind: "codex", prompt: "half a thought", destination: "right", cwd: "/tmp/child" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(drafts.saved)), [{ kind: "codex", prompt: "half a thought", preset: null, destination: "right", cwd: "/tmp/child" }]);
 
   ui.evaluate("state.prompt = new Editor('  \\n')");
   ui.evaluate("onEscape()");
@@ -596,6 +601,54 @@ test("kitty protocol keys come back as the legacy bytes readline knows", () => {
   assert.equal(legacyKeys("\x1b[127;5u"), "\b");
   assert.equal(legacyKeys("\x1b[9;2u"), "\x1b[Z");
   assert.equal(legacyKeys("a\x1b[1;5Db"), "a\x1b[1;5Db");
+});
+
+test("a preset selects its agent, shows itself, and comes off when picked again or with ctrl+x", () => {
+  const review = { name: "review", agent: "codex", prefix: "Review:", postfix: "", task: "ask" };
+  const ui = picker(null, undefined, { presets: [review, { name: "plain", agent: null, prefix: "", postfix: "", task: "ask" }] });
+  ui.evaluate("launched = 0; launch = () => { launched += 1 }");
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'p'}); onPresetsKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("agent().kind"), "codex");
+  assert.match(ui.evaluate("mainBody(71, 16).lines[2]"), /preset.*review/);
+  assert.equal(ui.evaluate("launched"), 0, "an ask preset waits for the prompt");
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'p'}); onPresetsKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("state.preset"), null);
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'p'}); onPresetsKey('l', {name: 'l'}); onPresetsKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("state.preset.name"), "plain");
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'x'})");
+  assert.equal(ui.evaluate("state.preset"), null);
+  assert.equal(ui.evaluate("mainBody(71, 16).lines[2]"), "");
+});
+
+test("a skip preset launches over an empty prompt but not over a typed one", () => {
+  const skip = { name: "tests", agent: "claude", prefix: "Run the tests.", postfix: "", task: "skip" };
+  const ui = picker(null, undefined, { presets: [skip] });
+  ui.evaluate("launched = 0; launch = () => { launched += 1 }");
+  ui.evaluate("state.prompt = new Editor('only the auth ones'); applyPreset(presets[0])");
+  assert.equal(ui.evaluate("launched"), 0);
+  ui.evaluate("state.preset = null; state.prompt = new Editor(''); applyPreset(presets[0])");
+  assert.equal(ui.evaluate("launched"), 1);
+});
+
+test("the launcher sends the preset's prefix and postfix around the typed prompt", () => {
+  const delivered = [];
+  const launcher = load("bin/launch.js", {
+    "node:fs": { readFileSync: () => JSON.stringify({
+      kind: "gemini", prompt: "the auth module", preset: { name: "review", prefix: "Review:", postfix: "Be brief." },
+    }) },
+    "../lib/timing": { createTiming: () => null },
+    "../lib/agents": { supportsInlinePrompt: () => false },
+    "../lib/herdr": {
+      run: (args) => args[0] === "tab"
+        ? { ok: true, result: { root_pane: { pane_id: "test-pane" } } }
+        : { ok: true, result: {} },
+    },
+  }, "try {\n  const success = main();");
+  launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  launcher.evaluate("waitInteractive = () => true");
+  launcher.context.deliverPrompt = (_, prompt) => delivered.push(prompt) > 0;
+  assert.equal(launcher.evaluate("main()"), true);
+  assert.deepEqual(delivered, ["Review:\n\nthe auth module\n\nBe brief."]);
 });
 
 test("the agent in a pane is matched by pane id and reports its foreground directory", () => {

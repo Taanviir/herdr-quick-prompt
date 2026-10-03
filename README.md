@@ -90,6 +90,8 @@ press `enter`.
 | `ctrl+k` | the full agent list, filterable by typing |
 | `ctrl+t` | destination: new tab → split right → split down → new workspace → new worktree |
 | `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
+| `ctrl+p` | presets, filterable by typing; choosing the active one removes it |
+| `ctrl+x` | remove the preset |
 | `esc` | close, keeping what you typed |
 
 Editing keys work as you would expect, in the prompt and the directory field:
@@ -178,6 +180,57 @@ prompt stops being true the moment the work moves on. The agent itself is named
 ```bash
 herdr agent read qp-codex --source recent-unwrapped --lines 120
 ```
+
+## Presets
+
+A preset is the text you keep typing around prompts, and optionally the agent
+it goes to. Press `ctrl+p`, pick one, and what you type is sent with the
+preset's prefix before it and its postfix after, separated by blank lines.
+Empty parts are dropped.
+
+Presets live in `presets.json` in the plugin's config directory. There is no
+editor in the popup; edit the file by hand, and the picker reads it each time
+it opens.
+
+```bash
+herdr plugin config-dir taanviir.quick-prompt
+# on Linux, normally ~/.config/herdr/plugins/config/taanviir.quick-prompt/
+```
+
+```json
+[
+  {
+    "name": "review",
+    "agent": "codex",
+    "prefix": "Review the change below. Point out bugs first, style last.",
+    "postfix": "Do not edit any files."
+  },
+  {
+    "name": "fix tests",
+    "agent": "claude",
+    "prefix": "Run the test suite and fix whatever fails.",
+    "task": "skip"
+  }
+]
+```
+
+| Field | |
+| --- | --- |
+| `name` | required and unique; what the list shows |
+| `agent` | an agent kind to switch to, as listed under `ctrl+k` |
+| `prefix`, `postfix` | text sent before and after your prompt |
+| `task` | `ask` (the default) waits for you to type; `skip` launches straight away over an empty prompt |
+
+A `skip` preset is for prompts that need nothing more from you. Pick it with
+text already typed and it applies like any other.
+
+The active preset shows under the agent chips. Pick it again, or press
+`ctrl+x`, to remove it. A preset with a mistake in it is left out of the list,
+and the list says which one and why.
+
+A prompt with a prefix or postfix has blank lines in it, and Herdr refuses
+newlines in launch arguments, so it is typed into the agent rather than passed
+at launch.
 
 ## How it works
 
