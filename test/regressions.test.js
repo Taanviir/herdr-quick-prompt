@@ -939,6 +939,23 @@ test("a skip preset launches over an empty prompt but not over a typed one", () 
   assert.equal(ui.evaluate("launched"), 1);
 });
 
+test("in a follow-up a preset only wraps the text: it neither switches agent nor sends", () => {
+  const { parseAgents } = require("../lib/running");
+  const requests = [];
+  const skip = { name: "tests", agent: "claude", prefix: "Run the tests.", postfix: "", task: "skip" };
+  const ui = picker(null, { presets: [skip], requests, runningList: parseAgents({ agents: LISTED }) });
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex')");
+  ui.evaluate("openRunning(); onRunningKey('\\r', {name: 'return'})");
+  assert.ok(ui.evaluate("state.followUp"));
+  ui.evaluate("applyPreset(presets[0])");
+  assert.equal(requests.length, 0, "nothing is sent until Enter");
+  assert.equal(ui.evaluate("agent().kind"), "codex");
+  assert.equal(ui.evaluate("state.preset.name"), "tests");
+  ui.evaluate("onMainKey('\\r', {name: 'return'})");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].preset.name, "tests");
+});
+
 test("the launcher sends the preset's prefix and postfix around the typed prompt", () => {
   const delivered = [];
   const launcher = load("bin/launch.js", {
