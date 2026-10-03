@@ -31,7 +31,7 @@ testing the published copy.
 | `bin/open.js` | Resolves the caller's location and opens the popup |
 | `bin/setup.js` | Writes the keybinding into the user's `config.toml` |
 | `bin/picker.js` | The modal TUI: rendering, keys, paste |
-| `bin/launch.js` | Detached worker: creates the tab or split, starts the agent, delivers the prompt |
+| `bin/launch.js` | Detached worker: creates the tab or split, starts the agent, delivers the prompt; or sends a follow-up |
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
 | `lib/agents.js` | Agent catalog, `PATH` detection, which kinds take an inline prompt |
 | `lib/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
@@ -39,6 +39,7 @@ testing the published copy.
 | `lib/ui.js` | Colours, padding, truncation, path shortening |
 | `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
+| `lib/running.js` | The running agents behind `ctrl+r`, waiting ones first |
 | `lib/state.js` | Preferences and launch requests under `HERDR_PLUGIN_STATE_DIR` |
 
 ## Things that will bite you
@@ -95,8 +96,9 @@ Then read the output back and check it: no line wider than the terminal, the
 prompt where you expect it, and — for paste — that nothing launched.
 
 When changing anything the user can launch, remember that `bin/launch.js` starts
-a real agent in a real tab. Point `HERDR_BIN_PATH` at `/bin/true` to exercise the
-path without one.
+a real agent in a real tab, and a follow-up types into an agent you have running.
+Point `HERDR_BIN_PATH` at `/bin/true` to exercise the path without one, or at a
+script that prints a canned `agent list` to try follow-ups.
 
 ## Screenshots
 

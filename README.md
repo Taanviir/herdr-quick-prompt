@@ -11,6 +11,8 @@ prompt.
   supports is behind `ctrl+k`.
 - **New tab, a split, or a whole new workspace** — `ctrl+t` to choose, and
   `ctrl+d` to start it somewhere other than where you are.
+- **Follow-ups.** `ctrl+r` sends the prompt to an agent that is already running
+  instead of starting a new one.
 - **The prompt lands before the TUI paints.** Agents whose CLI takes a prompt as
   an argument get it at launch instead of being typed into.
 - **Pasting works** — bracketed paste, unmarked bursts, and `ctrl+v` reading your
@@ -70,7 +72,8 @@ press `enter`.
 | `ctrl+k` | the full agent list, filterable by typing |
 | `ctrl+t` | destination: new tab → split right → split down → new workspace |
 | `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
-| `esc` | cancel |
+| `ctrl+r` | follow up: send the prompt to an agent that is already running |
+| `esc` | cancel, or leave a follow-up |
 
 Editing keys work as you would expect, in the prompt and the directory field:
 
@@ -120,6 +123,13 @@ against the ones installed here:
 
 ![The full agent list, with installed agents marked](docs/quick-prompt-agents.png)
 
+`ctrl+r` lists the agents already running in Herdr, filterable by title, kind,
+or directory. The ones waiting on you, idle or done, come first; blocked ones
+come last, since Herdr will not hand them a prompt. Pick one and the popup
+becomes a follow-up to it. The header names the agent, Enter sends the prompt
+there, and the agent, destination, and directory keys do nothing. `esc` goes
+back to launching a new agent, and `ctrl+r` picks a different one.
+
 Pasting works whether or not your terminal supports it. A paste arrives as a
 burst of keypresses where a newline would otherwise mean "launch" and a tab
 would mean "next agent", so the picker collects the whole burst and inserts it
@@ -153,6 +163,11 @@ The agent has the prompt before its TUI paints, which is both faster and immune
 to a startup repaint eating the keystrokes. Everything else falls back to typing
 into the TUI: wait for `interactive_ready`, send, then confirm the text actually
 landed before retrying. Failures surface as a Herdr notification.
+
+A follow-up goes through the same worker. The agent is already past its startup
+repaint, so it is a single `herdr agent prompt` that waits for the agent to
+start working; if it never does, or the agent is blocked, you get the same
+notification and the draft is kept.
 
 Set `QUICK_PROMPT_NO_INLINE=1` to force the keystroke path, for comparing the two
 when an agent misbehaves with a launch argument.
