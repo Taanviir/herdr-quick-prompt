@@ -9,12 +9,12 @@ prompt.
 - **One screen.** The cursor starts in the prompt; the agent is one keystroke away.
 - **Numbered chips** for the agents you actually have installed. Every kind Herdr
   supports is behind `ctrl+k`.
-- **New tab, a split, or a whole new workspace** — `ctrl+t` to choose, and
-  `ctrl+d` to start it somewhere other than where you are.
+- **New tab, a split, a whole new workspace, or a git worktree** — `ctrl+t` to
+  choose, and `ctrl+d` to start it somewhere other than where you are.
 - **The prompt lands before the TUI paints.** Agents whose CLI takes a prompt as
   an argument get it at launch instead of being typed into.
 - **Pasting works** — bracketed paste, unmarked bursts, and `ctrl+v` reading your
-  system clipboard.
+  system clipboard. Dropped screenshots are copied before macOS deletes them.
 - **No dependencies, no build step.** Just Node.
 
 ## Install
@@ -55,6 +55,25 @@ You can also open it without a key:
 herdr plugin action invoke taanviir.quick-prompt.open
 ```
 
+### Duplicate the focused agent
+
+A second action, `duplicate`, opens the same popup set up to run another copy
+of whatever agent is in the pane you are on: that agent starts selected, and
+the directory is the one it is working in now. If it moved into a worktree, you
+get the worktree, not the directory its pane opened in. On a pane with no agent it opens exactly like
+`open`. The setup action only binds `open`, so add this one by hand:
+
+```toml
+[[keys.command]]
+key = "prefix+shift+a"
+type = "plugin_action"
+command = "taanviir.quick-prompt.duplicate"
+description = "Quick Prompt with the focused agent"
+```
+
+It is a separate action rather than the default so that `open` always starts
+from the agent you used last, wherever you press it.
+
 ## Using it
 
 Everything is on one screen, and the cursor starts in the prompt — just type and
@@ -65,14 +84,15 @@ press `enter`.
 | `⏎` | launch (an empty prompt just opens the agent) |
 | `\` `⏎`, `shift+⏎`, `ctrl+⏎`, `alt+⏎`, `ctrl+j` | newline in the prompt |
 | `ctrl+v` | paste from the system clipboard |
+| `↑` / `↓` | older / newer prompt from history, from the first / last line of the prompt |
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1`…`alt+9` | jump straight to a numbered agent |
 | `ctrl+k` | the full agent list, filterable by typing |
-| `ctrl+t` | destination: new tab → split right → split down → new workspace |
+| `ctrl+t` | destination: new tab → split right → split down → new workspace → new worktree |
 | `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
 | `ctrl+p` | presets, filterable by typing; choosing the active one removes it |
 | `ctrl+x` | remove the preset |
-| `esc` | cancel |
+| `esc` | close, keeping what you typed |
 
 Editing keys work as you would expect, in the prompt and the directory field:
 
@@ -88,14 +108,18 @@ On macOS, option+arrow moves by word once the terminal sends Option as Meta or
 Esc (iTerm2, Terminal.app, and Ghostty all have the setting), and cmd+arrow works
 wherever the terminal maps it to Home/End or `ctrl+a`/`ctrl+e`.
 
-Up/down moves between displayed prompt lines, including wrapped lines. Long
+Up/down moves between displayed prompt lines, including wrapped lines. Past the
+first line, up recalls the prompts you launched before, newest first; past the
+last line, down walks forward again and ends on whatever you were typing. Long
 directory paths scroll horizontally to keep the cursor visible.
 
-If a launch fails, reopen Quick Prompt to recover the prompt, agent, directory,
-and destination. Edit it and press Enter to retry, or use `ctrl+u` to clear the
-text. Retrying uses the workspace and pane you open the picker from. Failed
-drafts stay in the plugin state directory until replaced by a retry; successful
-launch requests are removed.
+Closing with `esc` keeps what you typed. The next time you open Quick Prompt it
+starts on that draft, with the prompt, agent, directory, and destination as you
+left them and the cursor at the end. A launch that fails comes back the same way, so you can edit
+it and press Enter to retry. Either way, `ctrl+u` throws the draft away, and so
+does closing an empty box. Retrying uses the workspace and pane you open the
+picker from. There is only ever one draft, in the plugin state directory: a
+launch clears it, and one more than a day old is dropped.
 
 The numbered chips are the agents you actually have installed, so `alt+1`–`alt+9`
 always mean something. Their order is fixed on purpose — a number that points at
@@ -103,7 +127,7 @@ a different agent depending on what you ran last is worse than no number at all 
 so recency only decides which chip starts selected, never where it sits.
 
 `ctrl+t` cycles where the agent lands — a new tab, a split beside the pane you
-came from, or a new workspace of its own:
+came from, a new workspace of its own, or a new git worktree:
 
 ![The same popup with the destination set to split down](docs/quick-prompt-split.png)
 
@@ -117,6 +141,13 @@ complete one:
 A new workspace takes its name from that directory, the way Herdr names one you
 open by hand.
 
+A new worktree branches from the repository that directory belongs to, through
+`herdr worktree create`, and opens in a workspace named after the branch. The
+branch name comes from the first line of your prompt, lowercased, with hyphens
+between words and cut to 40 characters. "Fix the login bug" becomes
+`fix-the-login-bug`, or `fix-the-login-bug-2` if that branch already exists. An empty prompt gets a random name like
+`quiet-otter-hums`. Outside a git repository `ctrl+t` skips this destination.
+
 `ctrl+k` opens every kind Herdr supports, filterable by typing, with a filled dot
 against the ones installed here:
 
@@ -129,6 +160,17 @@ as text: bracketed paste when the terminal marks it, and a byte-count check when
 it does not. `ctrl+v` is not a terminal paste at all — the byte reaches the
 application — so the picker reads your clipboard itself through `wl-paste`,
 `xclip`, `xsel`, `pbpaste`, or PowerShell on WSL and Windows.
+
+Dropping a file onto the popup pastes its path, and some of those paths do not
+last until the agent reads them. A macOS screenshot dragged from its floating
+thumbnail lives in a `TemporaryItems` folder that macOS clears soon after, and
+its name has a narrow no-break space before `PM` that the agent types back as a
+plain one. So when a paste is nothing but paths to existing files, the picker
+copies two kinds of file to `attachments/` in the plugin state directory: any
+file under `TemporaryItems`, and any image whose path has spaces or non-ASCII
+characters. The copy gets a plain ASCII name, and the prompt gets its path.
+Every other path stays as pasted. The picker deletes copies older than a week
+the next time it makes one.
 
 New tabs are left unlabelled, so they get Herdr's ordinary numbering and the
 agent's own live title does the describing — a label frozen from your opening
@@ -212,7 +254,9 @@ when an agent misbehaves with a launch argument.
 
 The agent list is read from `herdr agent start --help` at runtime, so new agent
 kinds appear as soon as Herdr supports them. Your recent agents and last
-destination live in `HERDR_PLUGIN_STATE_DIR`.
+destination live in `HERDR_PLUGIN_STATE_DIR`, and so does `history.json`: your
+last 50 launched prompts, stored as plain text so that `↑` can recall them.
+Delete the file to forget them.
 
 The picker renders inside the popup Herdr already draws, so it has no border or
 title of its own, and it never moves its own working directory: the manifest
@@ -224,7 +268,8 @@ from travels as `QUICK_PROMPT_CWD` instead.
 Launch timings are recorded in `startup.jsonl` under `HERDR_PLUGIN_STATE_DIR`
 (on Linux, normally `~/.local/state/herdr/plugins/taanviir.quick-prompt/`).
 Each record includes dispatch time, individual Herdr calls, retry sleeps, and
-total worker time. Prompt text and command arguments are not logged. The log
+total worker time. Prompt text and command arguments are not logged here; your
+prompt history is kept apart from it, in `history.json`. The log
 rotates after 256 KiB, retaining one previous file. `agent start` includes Herdr's
 readiness detection, so its duration is not an exact measurement of first paint.
 
