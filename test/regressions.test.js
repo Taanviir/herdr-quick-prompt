@@ -8,14 +8,14 @@ const { createRequire } = require("node:module");
 const { test } = require("node:test");
 
 // Exercise entrypoint handlers without starting a terminal, agent, or server.
-function load(relative, mocks = {}, stop) {
+function load(relative, mocks = {}, stop, env = {}) {
   const file = path.resolve(__dirname, "..", relative);
   const realRequire = createRequire(file);
   const context = vm.createContext({
     require: (name) => mocks[name] ?? realRequire(name),
     module: { exports: {} },
     __dirname: path.dirname(file),
-    process: { env: { QUICK_PROMPT_CWD: "/tmp" }, stdout: { write() {} } },
+    process: { env: { QUICK_PROMPT_CWD: "/tmp", ...env }, stdout: { write() {} } },
     setImmediate() {},
   });
   const source = fs.readFileSync(file, "utf8");
@@ -60,24 +60,91 @@ test("an agent busy with its inline prompt counts as started after readiness tim
   assert.equal(calls, 2);
 });
 
-function picker(recovered = null, discarded = []) {
+function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
+  running = null, recents = [], history = [], presets = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
+} = {}) {
   return load("bin/picker.js", {
-    "../lib/agents": { catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
-      .map((kind) => ({ kind, installed: false })) },
+    "../lib/presets": {
+      PRESETS: "/tmp/presets.json",
+      readPresets: () => ({ presets, problems: [] }),
+      composePrompt: require("../lib/presets").composePrompt,
+    },
+    "../lib/agents": {
+      catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
+        .map((kind) => ({ kind, installed: false })),
+      runningAgent: (pane) => (pane === "w1:p2" ? running : null),
+    },
     "../lib/state": {
-      readPrefs: () => ({ recents: [], directories: [] }),
-      readFailedRequest: () => recovered,
-      discardRequest: (file) => discarded.push(file),
+      STATE_DIR: stateDir,
+      readPrefs: () => ({ recents, directories: [] }),
+      readHistory: () => history,
+      recordPrompt: () => {},
+      readDraft: () => draft,
+      saveDraft: (saved) => drafts.saved.push(saved),
+      clearDraft: () => { drafts.cleared += 1; return null; },
+      remember: () => {},
+      writeRequest: () => "/tmp/request.json",
       sweepStaleRequests: () => {},
     },
+    "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
     "../lib/dirs": {
       expand: (value) => value,
       isDirectory: (value) => ["/tmp/", "/tmp/child"].includes(value),
       complete: () => ["/tmp/child"],
       suggestions: () => [],
     },
-  }, "/* ---------- boot ---------- */");
+    "../lib/worktree": { insideRepo: (dir) => dir === "/repo" },
+  }, "/* ---------- boot ---------- */", running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {});
 }
+
+test("ctrl+t offers a worktree only inside a git repository, and launch refuses one outside", () => {
+  const drafts = { saved: [], cleared: 0 };
+  const ui = picker(null, drafts);
+  const cycle = () => {
+    const seen = [];
+    for (let i = 0; i < 5; i += 1) {
+      ui.evaluate("cycleDestination()");
+      seen.push(ui.evaluate("destination().id"));
+    }
+    return seen;
+  };
+  assert.equal(cycle().includes("worktree"), false);
+  ui.evaluate("state.cwd = '/repo'");
+  assert.equal(cycle().includes("worktree"), true);
+  ui.evaluate("state.destination = DESTINATIONS.findIndex((d) => d.id === 'worktree'); state.cwd = '/tmp'");
+  ui.evaluate("launch()");
+  assert.match(ui.evaluate("state.notice"), /git repository/);
+  assert.equal(drafts.cleared, 0, "nothing was launched");
+});
+
+test("the worktree destination branches from the prompt and starts the agent in its pane", () => {
+  const calls = [];
+  const worktree = load("lib/worktree.js", {
+    "node:child_process": {
+      // fix-the-login-bug already exists, so the launch takes the next name.
+      spawnSync: (_, args) => ({ status: args.at(-1) === "refs/heads/fix-the-login-bug" ? 0 : 1, stdout: "" }),
+    },
+  }).context.module.exports;
+  const launcher = load("bin/launch.js", {
+    "../lib/worktree": worktree,
+    "node:fs": { readFileSync: () => JSON.stringify({ kind: "claude", prompt: "Fix the login bug", destination: "worktree", cwd: "/repo" }) },
+    "../lib/timing": { createTiming: () => null },
+    "../lib/agents": { supportsInlinePrompt: () => true },
+    "../lib/herdr": {
+      run: (args) => {
+        calls.push(args);
+        if (args[0] === "worktree") return { ok: true, result: { root_pane: { pane_id: "w2:p1" } } };
+        return { ok: true, result: {} };
+      },
+    },
+  }, "try {\n  const success = main();");
+  launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  assert.equal(launcher.evaluate("main()"), true);
+  const created = calls.find((args) => args[0] === "worktree");
+  assert.equal(created.join(" "), "worktree create --cwd /repo --branch fix-the-login-bug-2 --label fix-the-login-bug-2 --focus");
+  const started = calls.find((args) => args[1] === "start");
+  assert.equal(started[started.indexOf("--pane") + 1], "w2:p1");
+});
 
 test("an agent outside the first five remains selected and visible", () => {
   const ui = picker();
@@ -131,36 +198,84 @@ test("vertical navigation keeps a preferred column through short and wrapped lin
   assert.equal(ui.evaluate("state.prompt.cursor"), 3);
 });
 
-test("failed requests survive reopening and successful requests are removed", (t) => {
-  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-recovery-test-"));
-  t.after(() => {
-    for (const name of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, name));
-    fs.rmdirSync(dir);
-  });
+// The real lib/state.js, keeping its files in a temporary directory.
+function stateIn(t, prefix) {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), prefix));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const state = load("lib/state.js", {}, "const STATE_DIR =");
   state.context.process.env.HERDR_PLUGIN_STATE_DIR = dir;
   state.context.process.pid = process.pid;
   const source = fs.readFileSync(path.resolve(__dirname, "../lib/state.js"), "utf8");
   vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
-  const api = state.context.module.exports;
+  return { dir, api: state.context.module.exports };
+}
+
+test("a failed launch becomes the draft and a successful one leaves nothing", (t) => {
+  const { dir, api } = stateIn(t, "qp-recovery-test-");
   const request = { kind: "gemini", prompt: "recover this", cwd: "/tmp/", destination: "down" };
   const file = api.writeRequest(request);
-  assert.equal(api.readFailedRequest(), null, "in-flight launches must not be restored");
+  assert.equal(api.readDraft(), null, "in-flight launches must not be restored");
   api.finishRequest(file, false);
-  const saved = api.readFailedRequest();
-  assert.equal(saved.request.prompt, request.prompt);
+  assert.equal(fs.existsSync(file), false);
+  const saved = api.readDraft();
+  assert.equal(saved.failed, true);
   const ui = picker(saved);
   assert.equal(ui.evaluate("state.prompt.text"), request.prompt);
+  assert.equal(ui.evaluate("state.prompt.cursor"), request.prompt.length);
   assert.equal(ui.evaluate("agent().kind"), request.kind);
   assert.equal(ui.evaluate("destination().id"), request.destination);
   assert.equal(ui.evaluate("state.cwd"), request.cwd);
-  assert.match(ui.evaluate("state.notice"), /Recovered/);
-  assert.ok(api.readFailedRequest(), "opening must not consume the draft");
-  api.discardRequest(saved.file);
+  assert.match(ui.evaluate("state.notice"), /Recovered failed launch/);
+  assert.ok(api.readDraft(), "opening must not consume the draft");
+  api.clearDraft();
   const success = api.writeRequest(request);
   api.finishRequest(success, true);
-  assert.equal(fs.existsSync(success), false);
-  assert.equal(api.readFailedRequest(), null);
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
+test("esc keeps a typed prompt as the draft, and an empty box forgets it", () => {
+  const drafts = { saved: [], cleared: 0 };
+  const ui = picker(null, drafts);
+  ui.evaluate("quit = () => {}");
+  ui.evaluate("state.agent = 2; state.destination = 1; state.cwd = '/tmp/child'; state.prompt = new Editor('half a thought')");
+  ui.evaluate('onMainKey("", { name: "escape" })');
+  assert.deepEqual(JSON.parse(JSON.stringify(drafts.saved)), [{ kind: "codex", model: null, effort: null, prompt: "half a thought", preset: null, destination: "right", cwd: "/tmp/child" }]);
+
+  ui.evaluate("state.prompt = new Editor('  \\n')");
+  ui.evaluate("onEscape()");
+  assert.equal(drafts.saved.length, 1, "whitespace is not worth keeping");
+  assert.equal(drafts.cleared, 1);
+});
+
+test("a kept draft reopens where it left off and launching clears it", () => {
+  const drafts = { saved: [], cleared: 0 };
+  const ui = picker({ kind: "codex", prompt: "carry on", destination: "workspace", cwd: "/tmp/child" }, drafts);
+  assert.equal(ui.evaluate("state.prompt.text"), "carry on");
+  assert.equal(ui.evaluate("state.prompt.cursor"), "carry on".length);
+  assert.equal(ui.evaluate("agent().kind"), "codex");
+  assert.equal(ui.evaluate("destination().id"), "workspace");
+  assert.match(ui.evaluate("state.notice"), /^Restored draft/);
+
+  ui.evaluate("quit = () => {}");
+  ui.evaluate("launch()");
+  assert.equal(drafts.cleared, 1);
+});
+
+test("a saved draft round-trips and one older than a day is removed", (t) => {
+  const { dir, api } = stateIn(t, "qp-draft-test-");
+  const draft = { kind: "claude", prompt: "keep me\nplease", destination: "tab", cwd: "/tmp" };
+  api.saveDraft(draft);
+  assert.deepEqual({ ...api.readDraft() }, draft);
+
+  const file = path.join(dir, "draft.json");
+  const old = Date.now() - 25 * 60 * 60 * 1000;
+  fs.utimesSync(file, old / 1000, old / 1000);
+  assert.equal(api.readDraft(), null);
+  assert.equal(fs.existsSync(file), false);
+
+  fs.writeFileSync(file, "{ not json");
+  assert.equal(api.readDraft(), null, "a malformed draft must not stop the picker opening");
+  assert.equal(fs.existsSync(file), false);
 });
 
 test("a multiline prompt is typed in, since Herdr refuses newlines in launch arguments", () => {
@@ -295,47 +410,41 @@ test("setup detects both TOML quote styles and treats punctuation literally", ()
   }
 });
 
-test("clearing a recovered draft throws it away instead of emptying the buffer", () => {
-  const recovered = { file: "/tmp/failed-request-1-1.json", request: { kind: "codex", prompt: "lost work" } };
-  const discarded = [];
-  const ui = picker(recovered, discarded);
+test("clearing a restored draft throws it away instead of emptying the buffer", () => {
+  const drafts = { saved: [], cleared: 0 };
+  const ui = picker({ kind: "codex", prompt: "lost work", failed: true }, drafts);
 
   assert.equal(ui.evaluate("state.prompt.text"), "lost work");
   ui.evaluate('onMainKey("", { ctrl: true, name: "u" })');
 
   assert.equal(ui.evaluate("state.prompt.text"), "");
-  assert.deepEqual(discarded, [recovered.file], "the notice offers ctrl+u as the way to be rid of it");
+  assert.equal(drafts.cleared, 1, "the notice offers ctrl+u as the way to be rid of it");
   assert.match(ui.evaluate("state.notice"), /discarded/);
 
   ui.evaluate('onMainKey("", { ctrl: true, name: "u" })');
-  assert.deepEqual(discarded, [recovered.file], "a second clear must not discard anything again");
-});
-
-test("reading a draft sweeps the older and unreadable ones it passes", (t) => {
-  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-sweep-test-"));
-  t.after(() => {
-    for (const name of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, name));
-    fs.rmdirSync(dir);
-  });
-
-  const state = load("lib/state.js", {}, "const STATE_DIR =");
-  state.context.process.env.HERDR_PLUGIN_STATE_DIR = dir;
-  const source = fs.readFileSync(path.resolve(__dirname, "../lib/state.js"), "utf8");
-  vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
-
-  const write = (name, body) => fs.writeFileSync(path.join(dir, name), body);
-  write("failed-request-1000000000000-1.json", JSON.stringify({ kind: "codex", prompt: "oldest" }));
-  write("failed-request-2000000000000-2.json", "{ not json");
-  write("failed-request-3000000000000-3.json", JSON.stringify({ kind: "claude", prompt: "newest" }));
-
-  const found = state.context.module.exports.readFailedRequest();
-  assert.equal(found.request.prompt, "newest");
-  assert.deepEqual(fs.readdirSync(dir), ["failed-request-3000000000000-3.json"],
-    "only the draft that can still be offered is kept");
+  assert.equal(drafts.cleared, 1, "a second clear must not discard anything again");
 });
 
 test("requests abandoned by a killed worker are swept, live ones are not", (t) => {
-  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-stale-test-"));
+  const { dir, api } = stateIn(t, "qp-stale-test-");
+
+  const body = JSON.stringify({ kind: "codex", prompt: "orphan" });
+  const orphan = path.join(dir, "request-1000000000000-1.json");
+  const live = path.join(dir, "request-2000000000000-2.json");
+  const draft = path.join(dir, "draft.json");
+  for (const file of [orphan, live, draft]) fs.writeFileSync(file, body);
+
+  const old = Date.now() - 2 * 60 * 60 * 1000;
+  fs.utimesSync(orphan, old / 1000, old / 1000);
+
+  api.sweepStaleRequests();
+  assert.equal(fs.existsSync(orphan), false, "a request older than any live launch is abandoned");
+  assert.equal(fs.existsSync(live), true, "a request that could still be in flight is left alone");
+  assert.equal(fs.existsSync(draft), true, "recoverable drafts are not requests and are not swept");
+});
+
+test("prompt history keeps the last fifty launches, newest first and without repeats", (t) => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-history-test-"));
   t.after(() => {
     for (const name of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, name));
     fs.rmdirSync(dir);
@@ -347,19 +456,77 @@ test("requests abandoned by a killed worker are swept, live ones are not", (t) =
   vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
   const api = state.context.module.exports;
 
-  const body = JSON.stringify({ kind: "codex", prompt: "orphan" });
-  const orphan = path.join(dir, "request-1000000000000-1.json");
-  const live = path.join(dir, "request-2000000000000-2.json");
-  const draft = path.join(dir, "failed-request-3000000000000-3.json");
-  for (const file of [orphan, live, draft]) fs.writeFileSync(file, body);
+  assert.deepEqual([...api.readHistory()], []);
+  api.recordPrompt("first");
+  api.recordPrompt("  second\n");
+  api.recordPrompt("   ");
+  api.recordPrompt("");
+  assert.deepEqual([...api.readHistory()], ["second", "first"], "trimmed, and blank launches are not kept");
 
-  const old = Date.now() - 2 * 60 * 60 * 1000;
-  fs.utimesSync(orphan, old / 1000, old / 1000);
+  api.recordPrompt("first");
+  assert.deepEqual([...api.readHistory()], ["first", "second"], "a repeat moves to the front instead of appearing twice");
 
-  api.sweepStaleRequests();
-  assert.equal(fs.existsSync(orphan), false, "a request older than any live launch is abandoned");
-  assert.equal(fs.existsSync(live), true, "a request that could still be in flight is left alone");
-  assert.equal(fs.existsSync(draft), true, "recoverable drafts are not requests and are not swept");
+  for (let n = 0; n < 60; n += 1) api.recordPrompt(`prompt ${n}`);
+  const history = api.readHistory();
+  assert.equal(history.length, 50);
+  assert.equal(history[0], "prompt 59");
+  assert.equal(history[49], "prompt 10");
+
+  fs.writeFileSync(path.join(dir, "history.json"), "{ not json");
+  assert.deepEqual([...api.readHistory()], [], "a damaged history must not prevent opening the picker");
+});
+
+test("history walks back to the oldest entry and forward to the draft it set aside", () => {
+  const { History } = require("../lib/history");
+  const history = new History(["newest", "older"]);
+  assert.equal(history.newer(), null, "nothing is newer than the draft");
+  assert.equal(history.older("draft"), "newest");
+  assert.equal(history.older("newest"), "older");
+  assert.equal(history.older("older"), null, "the oldest entry is the end");
+  assert.equal(history.newer(), "newest");
+  assert.equal(history.newer(), "draft");
+  assert.equal(history.newer(), null);
+  assert.equal(new History([]).older("draft"), null);
+});
+
+test("up and down recall history only past the top and bottom of the prompt", () => {
+  const ui = picker(null, undefined, { history: ["second\nline", "first"] });
+  const press = (name) => ui.evaluate(`onMainKey(undefined, {name: '${name}'}); state.prompt.text`);
+
+  ui.evaluate("state.prompt = new Editor('draft')");
+  assert.equal(press("up"), "second\nline");
+  assert.equal(press("up"), "second\nline", "a recalled multi-line prompt is walked line by line first");
+  assert.equal(ui.evaluate("state.prompt.cursor"), 4);
+  assert.equal(press("up"), "first");
+  assert.equal(press("up"), "first");
+  assert.equal(press("down"), "second\nline");
+  assert.equal(press("down"), "draft", "walking past the newest entry gives back what was being typed");
+  assert.equal(press("down"), "draft");
+
+  ui.evaluate("state.prompt = new Editor('one\\ntwo')");
+  assert.equal(press("up"), "one\ntwo", "up inside a multi-line draft still moves between its lines");
+  assert.equal(ui.evaluate("state.prompt.cursor"), 3);
+});
+
+test("launching records the prompt in history", () => {
+  const recorded = [];
+  const ui = load("bin/picker.js", {
+    "../lib/agents": { catalog: () => [{ kind: "claude", installed: true }] },
+    "../lib/state": {
+      STATE_DIR: path.join(require("node:os").tmpdir(), "qp-unused"),
+      readPrefs: () => ({ recents: [], directories: [] }),
+      readHistory: () => [],
+      recordPrompt: (prompt) => recorded.push(prompt),
+      remember: () => {},
+      writeRequest: () => "/tmp/request.json",
+      readDraft: () => null,
+      clearDraft: () => null,
+      sweepStaleRequests: () => {},
+    },
+    "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
+  }, "/* ---------- boot ---------- */");
+  ui.evaluate("quit = () => {}; state.prompt = new Editor('fix the bug'); launch()");
+  assert.deepEqual(recorded, ["fix the bug"]);
 });
 
 test("word motion and deletion stop at whitespace from either side", () => {
@@ -405,6 +572,22 @@ test("backslash-Enter, alt+Enter and ctrl+j add a newline while plain Enter laun
   assert.equal(ui.evaluate("launched"), 0);
   ui.evaluate("onMainKey('\\r', {name: 'return'})");
   assert.equal(ui.evaluate("launched"), 1);
+});
+
+test("a pasted drop lands in the prompt as its copy, and the directory field gets it as typed", (t) => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-drop-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const image = path.join(dir, "my photo.png");
+  fs.writeFileSync(image, "pixels");
+  const pasted = image.replace(/ /g, "\\ ");
+
+  const ui = picker(null, undefined, { stateDir: dir });
+  ui.evaluate(`insertPasted(${JSON.stringify(pasted)})`);
+  assert.equal(ui.evaluate("state.prompt.text"), path.join(dir, "attachments", "my-photo.png"));
+
+  ui.evaluate("openDirectories()");
+  ui.evaluate(`insertPasted(${JSON.stringify(pasted)})`);
+  assert.equal(ui.evaluate("state.overlay.input.text"), pasted);
 });
 
 test("kitty protocol keys come back as the legacy bytes readline knows", () => {
@@ -487,4 +670,103 @@ test("ctrl+o picks a model and effort for the selected agent only", () => {
   assert.equal(ui.evaluate("state.overlay"), null);
   assert.match(ui.evaluate("state.notice"), /no model choice for gemini/);
   assert.doesNotMatch(ui.evaluate("destinationRow(71)"), /model/);
+});
+
+test("a preset selects its agent, shows itself, and comes off when picked again or with ctrl+x", () => {
+  const review = { name: "review", agent: "codex", prefix: "Review:", postfix: "", task: "ask" };
+  const ui = picker(null, undefined, { presets: [review, { name: "plain", agent: null, prefix: "", postfix: "", task: "ask" }] });
+  ui.evaluate("launched = 0; launch = () => { launched += 1 }");
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'p'}); onPresetsKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("agent().kind"), "codex");
+  assert.match(ui.evaluate("mainBody(71, 16).lines[2]"), /preset.*review/);
+  assert.equal(ui.evaluate("launched"), 0, "an ask preset waits for the prompt");
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'p'}); onPresetsKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("state.preset"), null);
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'p'}); onPresetsKey('l', {name: 'l'}); onPresetsKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("state.preset.name"), "plain");
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'x'})");
+  assert.equal(ui.evaluate("state.preset"), null);
+  assert.equal(ui.evaluate("mainBody(71, 16).lines[2]"), "");
+});
+
+test("a skip preset launches over an empty prompt but not over a typed one", () => {
+  const skip = { name: "tests", agent: "claude", prefix: "Run the tests.", postfix: "", task: "skip" };
+  const ui = picker(null, undefined, { presets: [skip] });
+  ui.evaluate("launched = 0; launch = () => { launched += 1 }");
+  ui.evaluate("state.prompt = new Editor('only the auth ones'); applyPreset(presets[0])");
+  assert.equal(ui.evaluate("launched"), 0);
+  ui.evaluate("state.preset = null; state.prompt = new Editor(''); applyPreset(presets[0])");
+  assert.equal(ui.evaluate("launched"), 1);
+});
+
+test("the launcher sends the preset's prefix and postfix around the typed prompt", () => {
+  const delivered = [];
+  const launcher = load("bin/launch.js", {
+    "node:fs": { readFileSync: () => JSON.stringify({
+      kind: "gemini", prompt: "the auth module", preset: { name: "review", prefix: "Review:", postfix: "Be brief." },
+    }) },
+    "../lib/timing": { createTiming: () => null },
+    "../lib/agents": { supportsInlinePrompt: () => false },
+    "../lib/herdr": {
+      run: (args) => args[0] === "tab"
+        ? { ok: true, result: { root_pane: { pane_id: "test-pane" } } }
+        : { ok: true, result: {} },
+    },
+  }, "try {\n  const success = main();");
+  launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  launcher.evaluate("waitInteractive = () => true");
+  launcher.context.deliverPrompt = (_, prompt) => delivered.push(prompt) > 0;
+  assert.equal(launcher.evaluate("main()"), true);
+  assert.deepEqual(delivered, ["Review:\n\nthe auth module\n\nBe brief."]);
+});
+
+test("the agent in a pane is matched by pane id and reports its foreground directory", () => {
+  const { agentInPane } = require("../lib/agents");
+  const list = [
+    { agent: "claude", pane_id: "w1:p1", cwd: "/repo", foreground_cwd: "/repo/worktree", focused: true },
+    { agent: "codex", pane_id: "w1:p2", cwd: "/other" },
+    { pane_id: "w1:p3", cwd: "/no-agent" },
+  ];
+  assert.deepEqual(agentInPane(list, "w1:p1"), { kind: "claude", cwd: "/repo/worktree" });
+  assert.deepEqual(agentInPane(list, "w1:p2"), { kind: "codex", cwd: "/other" }, "falls back to the pane's cwd");
+  assert.equal(agentInPane(list, "w1:p3"), null, "a pane without an agent kind is no match");
+  assert.equal(agentInPane(list, "w9:p9"), null, "focus elsewhere is not a match");
+  assert.equal(agentInPane(list, undefined), null);
+  assert.equal(agentInPane(undefined, "w1:p1"), null);
+});
+
+test("looking up the running agent is bounded and gives up quietly", () => {
+  const calls = [];
+  const lookup = (reply) => load("lib/agents.js", {
+    "./herdr": { BIN: "herdr", run: (args, options) => { calls.push({ args, options }); return reply; } },
+  }).context.module.exports.runningAgent;
+
+  const found = lookup({ ok: true, result: { agents: [{ agent: "pi", pane_id: "w1:p2", foreground_cwd: "/src" }] } });
+  assert.deepEqual({ ...found("w1:p2") }, { kind: "pi", cwd: "/src" });
+  assert.deepEqual([...calls[0].args], ["agent", "list"]);
+  assert.ok(calls[0].options.timeout > 0, "a hung Herdr must not hold the popup open");
+
+  assert.equal(lookup({ ok: false, message: "spawnSync herdr ETIMEDOUT" })("w1:p2"), null);
+  assert.equal(lookup({ ok: true, result: {} })("w1:p2"), null);
+  calls.length = 0;
+  assert.equal(lookup({ ok: true, result: {} })(undefined), null);
+  assert.equal(calls.length, 0, "no origin pane means nothing to ask");
+});
+
+test("duplicate selects the focused pane's agent and directory over recency and a draft", () => {
+  const ui = picker(null, undefined, { running: { kind: "codex", cwd: "/work/tree" }, recents: ["gemini"] });
+  assert.equal(ui.evaluate("agent().kind"), "codex");
+  assert.equal(ui.evaluate("state.cwd"), "/work/tree");
+
+  const draft = { kind: "amp", prompt: "x", cwd: "/old" };
+  const withDraft = picker(draft, undefined, { running: { kind: "cursor", cwd: "/work/tree" } });
+  assert.equal(withDraft.evaluate("agent().kind"), "cursor");
+  assert.equal(withDraft.evaluate("state.cwd"), "/work/tree");
+  assert.equal(withDraft.evaluate("state.prompt.text"), "x", "the draft's prompt is still restored");
+
+  const unknown = picker(null, undefined, { running: { kind: "someday", cwd: null }, recents: ["gemini"] });
+  assert.equal(unknown.evaluate("agent().kind"), "gemini", "a kind the catalog lacks falls back to recency");
+  assert.equal(unknown.evaluate("state.cwd"), "/tmp");
+
+  assert.equal(picker(null, undefined, { recents: ["gemini"] }).evaluate("agent().kind"), "gemini");
 });

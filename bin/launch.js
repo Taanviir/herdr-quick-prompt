@@ -9,6 +9,8 @@ const { run: herdrRun, notify, HerdrError } = require("../lib/herdr");
 const { createTiming } = require("../lib/timing");
 const { supportsInlinePrompt } = require("../lib/agents");
 const { modelArgs } = require("../lib/models");
+const { composePrompt } = require("../lib/presets");
+const { branchName, uniqueBranch } = require("../lib/worktree");
 
 const START_ATTEMPTS = 12;
 const START_RETRY_MS = 400;
@@ -80,6 +82,19 @@ function createWorkspace({ cwd }) {
   return pane;
 }
 
+// A new branch of the directory's repository, checked out in a workspace of its
+// own. The workspace is labelled with the branch, since every worktree of one
+// repository would otherwise share its name.
+function createWorktree({ cwd, prompt }) {
+  const branch = uniqueBranch(cwd, branchName(prompt));
+  const args = ["worktree", "create", "--cwd", cwd, "--branch", branch, "--label", branch, "--focus"];
+
+  const { result } = run(args);
+  const pane = result.root_pane?.pane_id;
+  if (!pane) throw new HerdrError("herdr did not return a pane for the new worktree");
+  return pane;
+}
+
 function createSplit({ pane, cwd, direction }) {
   if (!pane) throw new HerdrError("no pane to split; open Quick Prompt from a pane");
 
@@ -92,14 +107,17 @@ function createSplit({ pane, cwd, direction }) {
   return created;
 }
 
-// Where the agent lands: its own tab, a split beside the caller, or a whole new
-// workspace.
+// Where the agent lands: its own tab, a split beside the caller, a whole new
+// workspace, or a new worktree.
 function createTarget(request) {
   if (request.destination === "right" || request.destination === "down") {
     return createSplit({ pane: request.pane, cwd: request.cwd, direction: request.destination });
   }
   if (request.destination === "workspace") {
     return createWorkspace({ cwd: request.cwd });
+  }
+  if (request.destination === "worktree") {
+    return createWorktree({ cwd: request.cwd, prompt: request.prompt });
   }
   return createTab({ workspace: request.workspace, cwd: request.cwd });
 }
@@ -141,7 +159,8 @@ function main() {
 
   const request = readRequest(file);
   timing = createTiming(request);
-  const { kind, prompt } = request;
+  const { kind } = request;
+  const prompt = composePrompt(request.preset, request.prompt);
 
   const name = uniqueName(kind);
   const pane = createTarget(request);

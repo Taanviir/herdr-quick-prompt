@@ -12,24 +12,30 @@ const fs = require("node:fs");
 const { PassThrough } = require("node:stream");
 const { StringDecoder } = require("node:string_decoder");
 
-const { catalog } = require("../lib/agents");
+const { catalog, runningAgent } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
+const { History } = require("../lib/history");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, writeRequest, readFailedRequest, discardRequest, sweepStaleRequests } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
+const { stage } = require("../lib/dropped");
 const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 const { modelsFor, effortsFor, normalize, modelLabel } = require("../lib/models");
+const { PRESETS, readPresets, composePrompt } = require("../lib/presets");
+const { insideRepo } = require("../lib/worktree");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
+const ATTACHMENTS = path.join(STATE_DIR, "attachments");
 
 const DESTINATIONS = [
   { id: "tab", label: "new tab" },
   { id: "right", label: "split right" },
   { id: "down", label: "split down" },
   { id: "workspace", label: "new workspace" },
+  { id: "worktree", label: "new worktree" },
 ];
 
 // Enough chips to be useful on a machine with nothing installed yet.
@@ -51,10 +57,14 @@ const originPane = process.env.QUICK_PROMPT_PANE ?? ctx.focused_pane_id ?? proce
 
 const prefs = readPrefs();
 const agents = catalog();
+const { presets, problems: presetProblems } = readPresets();
 sweepStaleRequests();
-const recovered = readFailedRequest();
-// Cleared once the draft has been taken up or thrown away, so neither happens twice.
-let recoveredFile = recovered?.file ?? null;
+const draft = readDraft();
+// Cleared once the draft has been thrown away, so the notice says so only once.
+let restored = Boolean(draft);
+// The duplicate action starts from the agent in the pane you came from, which
+// is a deliberate ask, so it outranks both a restored draft and recency.
+const duplicate = process.env.QUICK_PROMPT_DUPLICATE ? runningAgent(originPane) : null;
 const out = process.stdout;
 
 // A paste is a burst of keypresses: inside it a newline is content, not "launch",
@@ -69,15 +79,27 @@ let swallow = false;
 // Escapes already acted on, waiting for readline to emit them late.
 let pendingEscapes = 0;
 
+// The first of these that is a kind Herdr knows starts selected.
+function initialAgent(...wanted) {
+  for (const kind of wanted) {
+    const at = agents.findIndex((a) => a.kind === kind);
+    if (at >= 0) return at;
+  }
+  return 0;
+}
+
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
-  agent: Math.max(0, agents.findIndex((a) => a.kind === (recovered?.request.kind ?? prefs.recents[0]))),
-  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (recovered?.request.destination ?? prefs.destination))),
-  prompt: new Editor(recovered?.request.prompt ?? ""),
-  cwd: recovered?.request.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
-  models: recovered ? { ...prefs.models, [recovered.request.kind]: recovered.request } : { ...prefs.models },
-  overlay: null, // { type: "agents" | "dirs" | "model", ... } while a picker is open
-  notice: recovered ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear" : null,
+  agent: initialAgent(duplicate?.kind, draft?.kind, prefs.recents[0]),
+  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draft?.destination ?? prefs.destination))),
+  prompt: new Editor(draft?.prompt ?? ""),
+  history: new History(readHistory()),
+  cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
+  preset: draft?.preset ?? null,
+  models: draft ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
+  overlay: null, // { type: "agents" | "dirs" | "presets" | "model", ... } while a picker is open
+  notice: draft?.failed ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear"
+    : draft ? "Restored draft · ctrl+u clear" : null,
 };
 
 // Every cell inside the popup has to be written: cells this never paints show
@@ -137,6 +159,7 @@ function render() {
 function mainBody(inner, rows) {
   const lines = new Array(rows).fill("");
   lines[1] = chipRow(inner);
+  if (state.preset) lines[2] = presetRow();
 
   const caret = promptBlock(lines, 3, Math.max(1, rows - 6), inner);
 
@@ -221,8 +244,12 @@ function destinationRow(inner) {
   return `${head}${shortenPath(state.cwd, Math.max(12, room(head)))}${tail}`;
 }
 
+function presetRow() {
+  return `${style.dim("preset")} ${style.accent(state.preset.name)}  ${style.dim("ctrl+p change · ctrl+x clear")}`;
+}
+
 function hints() {
-  const verb = state.prompt.isEmpty ? "⏎ open agent" : "⏎ launch";
+  const verb = composePrompt(state.preset, state.prompt.text) ? "⏎ launch" : "⏎ open agent";
   return `${verb} · tab agent · ctrl+v paste · \\⏎ newline · esc cancel`;
 }
 
@@ -328,6 +355,119 @@ function onModelKey(chunk, key) {
     case key.name === "return" || key.name === "enter":
       state.models[overlay.kind] = { model: models[overlay.index], effort: overlay.effort };
       state.overlay = null;
+      break;
+    default:
+      return;
+  }
+  scheduleRender();
+}
+
+/* ---------- presets ---------- */
+
+function presetMatches() {
+  const needle = state.overlay.filter.toLowerCase();
+  return presets.filter((item) => item.name.toLowerCase().includes(needle));
+}
+
+function presetsBody(inner, rows) {
+  const lines = new Array(rows).fill("");
+  const list = presetMatches();
+
+  lines[0] = state.overlay.filter
+    ? `${style.dim("preset")}  ${style.accent(state.overlay.filter)}${style.dim("▏")}`
+    : style.dim("preset");
+
+  // A broken entry is skipped, so say which one rather than let it vanish.
+  let footer = rows - 1;
+  if (presetProblems.length) {
+    const more = presetProblems.length > 1 ? ` (+${presetProblems.length - 1} more)` : "";
+    lines[rows - 2] = style.warn(`${presetProblems[0]}${more}`);
+    footer = rows - 2;
+  }
+
+  if (presets.length === 0) {
+    lines[1] = style.dim("no presets yet; add them to");
+    lines[2] = shortenPath(PRESETS, inner);
+    lines[rows - 1] = style.dim("esc back");
+    return { lines, caret: null };
+  }
+  if (list.length === 0) {
+    lines[1] = style.warn("no preset matches that filter");
+    lines[rows - 1] = style.dim("esc back");
+    return { lines, caret: null };
+  }
+
+  const room = footer - 1;
+  const active = Math.min(state.overlay.index, list.length - 1);
+  const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
+  const detailWidth = 18;
+  const nameWidth = Math.max(10, inner - detailWidth - 5);
+
+  list.slice(start, start + room).forEach((item, index) => {
+    const at = start + index;
+    const name = pad(truncate(item.name, nameWidth), nameWidth);
+    const detail = style.dim(pad(truncate([item.agent, item.task === "skip" ? "skip" : null]
+      .filter(Boolean).join(" · "), detailWidth), detailWidth));
+    const mark = item.name === state.preset?.name ? style.ok("●") : " ";
+    lines[1 + index] = at === active
+      ? `${style.selected(` ${name}`)} ${detail} ${mark}`
+      : ` ${name} ${detail} ${mark}`;
+  });
+
+  lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ apply, again to remove · esc back");
+  return { lines, caret: null };
+}
+
+function openPresets() {
+  const index = presets.findIndex((item) => item.name === state.preset?.name);
+  state.overlay = { type: "presets", filter: "", index: Math.max(0, index) };
+}
+
+// Choosing the preset already applied takes it off again. A skip preset over an
+// empty prompt has nothing left to ask for, so it launches straight away.
+function applyPreset(preset) {
+  if (state.preset?.name === preset.name) {
+    state.preset = null;
+    return;
+  }
+  state.preset = preset;
+  if (preset.agent) {
+    const index = agents.findIndex((item) => item.kind === preset.agent);
+    if (index < 0) {
+      state.notice = `preset ${preset.name}: herdr has no agent kind "${preset.agent}"`;
+      return;
+    }
+    state.agent = index;
+  }
+  if (preset.task === "skip" && state.prompt.isEmpty) launch();
+}
+
+function onPresetsKey(chunk, key) {
+  const list = presetMatches();
+
+  switch (true) {
+    case key.name === "escape":
+      state.overlay = null;
+      break;
+    case key.name === "up" || (key.ctrl && key.name === "p"):
+      state.overlay.index = Math.max(0, Math.min(state.overlay.index, list.length - 1) - 1);
+      break;
+    case key.name === "down" || (key.ctrl && key.name === "n"):
+      state.overlay.index = Math.min(list.length - 1, state.overlay.index + 1);
+      break;
+    case key.name === "return" || key.name === "enter": {
+      const chosen = list[Math.min(state.overlay.index, list.length - 1)];
+      state.overlay = null;
+      if (chosen) applyPreset(chosen);
+      break;
+    }
+    case key.name === "backspace":
+      state.overlay.filter = state.overlay.filter.slice(0, -1);
+      state.overlay.index = 0;
+      break;
+    case isPrintable(chunk, key):
+      state.overlay.filter += chunk.toLowerCase();
+      state.overlay.index = 0;
       break;
     default:
       return;
@@ -534,7 +674,7 @@ function onEscape() {
     state.overlay = null;
     return scheduleRender();
   }
-  quit(0);
+  close();
 }
 
 function insertPasted(text) {
@@ -552,7 +692,9 @@ function insertPasted(text) {
     state.overlay.index = 0;
     return;
   }
-  state.prompt.insert(clean);
+  const dropped = stage(clean, ATTACHMENTS);
+  if (dropped?.failed.length) state.notice = `could not copy ${dropped.failed.join(", ")} · pasted its path`;
+  state.prompt.insert(dropped?.text ?? clean);
 }
 
 function cycleAgent(step) {
@@ -567,14 +709,16 @@ function onMainKey(chunk, key) {
   state.notice = null;
 
   switch (true) {
+    // Up and down walk the prompt's own lines first and history only past its
+    // top and bottom, so a multi-line prompt stays editable.
     case key.name === "up":
-      prompt.moveVertical(-1, content() - 2);
+      if (!prompt.moveVertical(-1, content() - 2)) recall(state.history.older(prompt.text));
       break;
     case key.name === "down":
-      prompt.moveVertical(1, content() - 2);
+      if (!prompt.moveVertical(1, content() - 2)) recall(state.history.newer());
       break;
     case key.name === "escape":
-      return quit(0);
+      return close();
     case isNewline(chunk, key):
       prompt.insert("\n");
       break;
@@ -599,26 +743,36 @@ function onMainKey(chunk, key) {
     case key.ctrl && key.name === "o":
       openModels();
       break;
+    case key.ctrl && key.name === "p":
+      openPresets();
+      break;
+    case key.ctrl && key.name === "x":
+      state.preset = null;
+      break;
     case key.ctrl && key.name === "t":
-      state.destination = (state.destination + 1) % DESTINATIONS.length;
+      cycleDestination();
       break;
     case key.meta && /^[1-9]$/.test(key.name ?? ""):
       pickChip(Number(key.name) - 1);
       break;
     case key.ctrl && key.name === "u":
       prompt.clear();
-      // The recovery notice offers this as the way to be rid of the draft, so
-      // it has to actually throw it away rather than just empty the buffer.
-      if (recoveredFile) {
-        discardRequest(recoveredFile);
-        recoveredFile = null;
-        state.notice = "recovered draft discarded";
+      // The draft notice offers this as the way to be rid of the draft, so it
+      // has to actually throw it away rather than just empty the buffer.
+      if (restored) {
+        clearDraft();
+        restored = false;
+        state.notice = "draft discarded";
       }
       break;
     default:
       if (!editKey(prompt, chunk, key)) return;
   }
   scheduleRender();
+}
+
+function recall(text) {
+  if (text !== null) state.prompt = new Editor(text);
 }
 
 // Plain \r launches. \n is ctrl+j, or shift+enter and ctrl+enter as
@@ -710,6 +864,13 @@ function onAgentsKey(chunk, key) {
   scheduleRender();
 }
 
+// A worktree needs a repository to branch from, so outside one it is skipped.
+function cycleDestination() {
+  do {
+    state.destination = (state.destination + 1) % DESTINATIONS.length;
+  } while (destination().id === "worktree" && !insideRepo(state.cwd));
+}
+
 // alt+N always means the same agent as the chip numbered N.
 function pickChip(index) {
   const chips = chipAgents();
@@ -724,6 +885,7 @@ const OVERLAYS = {
   agents: { body: agentsBody, key: onAgentsKey },
   dirs: { body: dirsBody, key: onDirsKey },
   model: { body: modelBody, key: onModelKey },
+  presets: { body: presetsBody, key: onPresetsKey },
 };
 
 /* ---------- launch ---------- */
@@ -732,12 +894,23 @@ function launch() {
   const chosen = agent();
   if (!chosen) return quit(0);
 
+  // The directory can change after the worktree was chosen, or a recovered
+  // draft can bring one along.
+  if (destination().id === "worktree" && !insideRepo(state.cwd)) {
+    state.notice = "no worktree outside a git repository · ctrl+t or ctrl+d to change";
+    return scheduleRender();
+  }
+
   remember(chosen.kind, destination().id, state.cwd, choice());
+  recordPrompt(state.prompt.text);
+  // Before the worker exists, so a failure it records is never wiped by this.
+  clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
     ...choice(),
     prompt: state.prompt.text.trim(),
+    preset: state.preset,
     destination: destination().id,
     cwd: state.cwd,
     workspace,
@@ -745,10 +918,18 @@ function launch() {
   });
 
   spawnDetached(process.execPath, [LAUNCHER, request]);
-  if (recoveredFile) {
-    discardRequest(recoveredFile);
-    recoveredFile = null;
+  quit(0);
+}
+
+// Closing keeps what you typed for next time; closing an empty box forgets it.
+function close() {
+  if (!state.prompt.text.trim()) {
+    clearDraft();
+    return quit(0);
   }
+  try {
+    saveDraft({ kind: agent().kind, ...choice(), prompt: state.prompt.text, preset: state.preset, destination: destination().id, cwd: state.cwd });
+  } catch { /* losing a draft is better than a modal that will not close */ }
   quit(0);
 }
 
