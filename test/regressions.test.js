@@ -60,12 +60,13 @@ test("an agent busy with its inline prompt counts as started after readiness tim
   assert.equal(calls, 2);
 });
 
-function picker(recovered = null, discarded = []) {
+function picker(recovered = null, discarded = [], history = []) {
   return load("bin/picker.js", {
     "../lib/agents": { catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
       .map((kind) => ({ kind, installed: false })) },
     "../lib/state": {
       readPrefs: () => ({ recents: [], directories: [] }),
+      readHistory: () => history,
       readFailedRequest: () => recovered,
       discardRequest: (file) => discarded.push(file),
       sweepStaleRequests: () => {},
@@ -393,6 +394,57 @@ test("prompt history keeps the last fifty launches, newest first and without rep
 
   fs.writeFileSync(path.join(dir, "history.json"), "{ not json");
   assert.deepEqual([...api.readHistory()], [], "a damaged history must not prevent opening the picker");
+});
+
+test("history walks back to the oldest entry and forward to the draft it set aside", () => {
+  const { History } = require("../lib/history");
+  const history = new History(["newest", "older"]);
+  assert.equal(history.newer(), null, "nothing is newer than the draft");
+  assert.equal(history.older("draft"), "newest");
+  assert.equal(history.older("newest"), "older");
+  assert.equal(history.older("older"), null, "the oldest entry is the end");
+  assert.equal(history.newer(), "newest");
+  assert.equal(history.newer(), "draft");
+  assert.equal(history.newer(), null);
+  assert.equal(new History([]).older("draft"), null);
+});
+
+test("up and down recall history only past the top and bottom of the prompt", () => {
+  const ui = picker(null, [], ["second\nline", "first"]);
+  const press = (name) => ui.evaluate(`onMainKey(undefined, {name: '${name}'}); state.prompt.text`);
+
+  ui.evaluate("state.prompt = new Editor('draft')");
+  assert.equal(press("up"), "second\nline");
+  assert.equal(press("up"), "second\nline", "a recalled multi-line prompt is walked line by line first");
+  assert.equal(ui.evaluate("state.prompt.cursor"), 4);
+  assert.equal(press("up"), "first");
+  assert.equal(press("up"), "first");
+  assert.equal(press("down"), "second\nline");
+  assert.equal(press("down"), "draft", "walking past the newest entry gives back what was being typed");
+  assert.equal(press("down"), "draft");
+
+  ui.evaluate("state.prompt = new Editor('one\\ntwo')");
+  assert.equal(press("up"), "one\ntwo", "up inside a multi-line draft still moves between its lines");
+  assert.equal(ui.evaluate("state.prompt.cursor"), 3);
+});
+
+test("launching records the prompt in history", () => {
+  const recorded = [];
+  const ui = load("bin/picker.js", {
+    "../lib/agents": { catalog: () => [{ kind: "claude", installed: true }] },
+    "../lib/state": {
+      readPrefs: () => ({ recents: [], directories: [] }),
+      readHistory: () => [],
+      recordPrompt: (prompt) => recorded.push(prompt),
+      remember: () => {},
+      writeRequest: () => "/tmp/request.json",
+      readFailedRequest: () => null,
+      sweepStaleRequests: () => {},
+    },
+    "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
+  }, "/* ---------- boot ---------- */");
+  ui.evaluate("quit = () => {}; state.prompt = new Editor('fix the bug'); launch()");
+  assert.deepEqual(recorded, ["fix the bug"]);
 });
 
 test("word motion and deletion stop at whitespace from either side", () => {

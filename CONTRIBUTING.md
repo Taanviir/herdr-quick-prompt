@@ -35,6 +35,7 @@ testing the published copy.
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
 | `lib/agents.js` | Agent catalog, `PATH` detection, which kinds take an inline prompt |
 | `lib/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
+| `lib/history.js` | Walking earlier prompts with `↑`/`↓`, keeping the unsent draft aside |
 | `lib/text.js` | Terminal-cell width and paste sanitising |
 | `lib/ui.js` | Colours, padding, truncation, path shortening |
 | `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
