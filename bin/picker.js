@@ -40,8 +40,6 @@ const DESTINATIONS = [
   { id: "worktree", label: "new worktree" },
 ];
 
-// Enough chips to be useful on a machine with nothing installed yet.
-const MIN_CHIPS = 5;
 const SHORTCUTS = 9;
 
 function context() {
@@ -93,8 +91,11 @@ function initialAgent(...wanted) {
     const at = agents.findIndex((a) => a.kind === kind);
     if (at >= 0) return at;
   }
-  return 0;
+  return Math.max(0, agents.findIndex((a) => a.installed));
 }
+
+// The kind Enter was refused for, so that Enter again launches it anyway.
+let launchAnyway = null;
 
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
@@ -125,8 +126,10 @@ const choice = () => (modelsFor(agent().kind) ? normalize(agent().kind, state.mo
 
 // The chip row is the agents you actually have, plus whatever is selected. The
 // other twenty kinds Herdr knows about are noise until you go looking (ctrl+k).
-const installedChips = agents.filter((item) => item.installed);
-const chips = installedChips.length >= MIN_CHIPS ? installedChips : agents.slice(0, MIN_CHIPS);
+const chips = agents.filter((item) => item.installed);
+const noneInstalled = chips.length === 0;
+// Marks a kind that is not on PATH wherever one can be picked.
+const missing = (kind) => (agents.find((item) => item.kind === kind)?.installed === false ? " ○" : "");
 function chipAgents() {
   if (!chips.includes(agent())) chips.push(agent());
   return chips;
@@ -181,9 +184,9 @@ function mainBody(inner, rows) {
 
 function chipRow(inner) {
   const chips = chipAgents();
-  const label = (item, index) => (index < SHORTCUTS ? `${index + 1} ${item.kind}` : item.kind);
+  const label = (item, index) => `${index < SHORTCUTS ? `${index + 1} ` : ""}${item.kind}${missing(item.kind)}`;
 
-  const hint = `ctrl+k`;
+  const hint = noneInstalled ? "no agent found on PATH · ctrl+k" : "ctrl+k";
   const room = inner - hint.length - 6;
 
   const shown = [];
@@ -212,12 +215,13 @@ function chipRow(inner) {
       const text = label(item, i);
       if (item === agent()) return style.selected(` ${text} `);
       const number = i < SHORTCUTS ? style.dim(`${i + 1} `) : "";
-      return ` ${number}${item.kind} `;
+      const mark = missing(item.kind) && style.dim(missing(item.kind));
+      return ` ${number}${item.kind}${mark} `;
     })
     .join(" ");
 
   const hidden = agents.length - shown.length;
-  const tail = style.dim(hidden > 0 ? `+${hidden} ${hint}` : hint);
+  const tail = noneInstalled ? style.warn(hint) : style.dim(hidden > 0 ? `+${hidden} ${hint}` : hint);
   const gap = Math.max(1, inner - displayWidth(row) - displayWidth(tail));
   return row + " ".repeat(gap) + tail;
 }
@@ -502,7 +506,7 @@ function presetsBody(inner, rows) {
   list.slice(start, start + room).forEach((item, index) => {
     const at = start + index;
     const name = pad(truncate(item.name, nameWidth), nameWidth);
-    const detail = style.dim(pad(truncate([item.agent, item.task === "skip" ? "skip" : null]
+    const detail = style.dim(pad(truncate([item.agent && `${item.agent}${missing(item.agent)}`, item.task === "skip" ? "skip" : null]
       .filter(Boolean).join(" · "), detailWidth), detailWidth));
     const mark = item.name === state.preset?.name ? style.ok("●") : " ";
     lines[1 + index] = at === active
@@ -807,6 +811,8 @@ function cycleAgent(step) {
 function onMainKey(chunk, key) {
   const prompt = state.prompt;
   state.notice = null;
+  const anyway = launchAnyway;
+  launchAnyway = null;
 
   switch (true) {
     // Up and down walk the prompt's own lines first and history only past its
@@ -827,7 +833,7 @@ function onMainKey(chunk, key) {
       break;
     // A backslash before Enter asks for a newline instead, as in Claude Code.
     case chunk === "\r" || key.name === "return":
-      if (prompt.cells[prompt.cursor - 1] !== "\\") return launch();
+      if (prompt.cells[prompt.cursor - 1] !== "\\") return launch(anyway);
       prompt.backspace();
       prompt.insert("\n");
       break;
@@ -1005,11 +1011,19 @@ const OVERLAYS = {
 
 /* ---------- launch ---------- */
 
-function launch() {
+function launch(anyway = null) {
   if (state.followUp) return sendFollowUp();
 
   const chosen = agent();
   if (!chosen) return quit(0);
+
+  // The popup only sees its own PATH, and a pane's shell can add to it, so a
+  // second Enter launches anyway.
+  if (!chosen.installed && anyway !== chosen.kind) {
+    state.notice = `${chosen.kind} is not on PATH · ⏎ again to launch anyway · ctrl+k to pick another`;
+    launchAnyway = chosen.kind;
+    return scheduleRender();
+  }
 
   // The directory can change after the worktree was chosen, or a recovered
   // draft can bring one along.

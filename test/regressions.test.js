@@ -201,6 +201,7 @@ function stateIn(prefix) {
 // given. `ui.state` reads and writes that directory as the picker does.
 function picker(draft = null, {
   running = null, runningList = [], requests = [], recents = [], history = [], presets = [],
+  installed = ["claude", "codex", "copilot", "cursor", "gemini"],
   env = {}, scratchpad = { available: () => false, save: () => ({ ok: true, message: "" }) },
 } = {}) {
   const { dir, api } = stateIn("qp-picker-");
@@ -215,7 +216,7 @@ function picker(draft = null, {
     },
     "../lib/agents": {
       catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
-        .map((kind) => ({ kind, installed: false })),
+        .map((kind) => ({ kind, installed: installed.includes(kind) })),
       runningAgent: (pane) => (pane === "w1:p2" ? running : null),
     },
     "../lib/state": {
@@ -297,6 +298,36 @@ test("an agent outside the first five remains selected and visible", () => {
   assert.match(ui.evaluate("chipRow(71)"), /gemini/);
   ui.evaluate("cycleAgent(1); cycleAgent(-1)");
   assert.equal(ui.evaluate("agent().kind"), "gemini");
+});
+
+test("only installed agents get chips, and one that is not is marked and needs a second Enter", () => {
+  const requests = [];
+  const ui = picker(null, { installed: ["claude", "codex"], requests });
+  const row = ui.evaluate("chipRow(71)").replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(row, /1 claude +2 codex/);
+  assert.doesNotMatch(row, /amp|copilot|cursor/, "no padding with agents that are not there");
+
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'amp')");
+  assert.match(ui.evaluate("chipRow(71)"), /amp ○/);
+  ui.evaluate("state.prompt = new Editor('fix it'); onMainKey('\\r', {name: 'return'})");
+  assert.match(ui.evaluate("state.notice"), /amp is not on PATH .* ctrl\+k/);
+  assert.equal(requests.length, 0);
+  ui.evaluate("onMainKey('', {name: 'left'}); onMainKey('\\r', {name: 'return'})");
+  assert.equal(requests.length, 0, "only an Enter straight after the notice confirms it");
+  ui.evaluate("onMainKey('\\r', {name: 'return'})");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].kind, "amp");
+});
+
+test("with nothing installed the chip row says so and points at ctrl+k", () => {
+  const ui = picker(null, { installed: [] });
+  assert.match(ui.evaluate("chipRow(71)"), /no agent found on PATH · ctrl\+k/);
+});
+
+test("a preset's agent that is not installed is marked in the list", () => {
+  const ui = picker(null, { presets: [{ name: "spike", agent: "amp", prefix: "x", postfix: "", task: "ask" }] });
+  ui.evaluate("openPresets()");
+  assert.match(ui.evaluate("presetsBody(71, 16).lines[1]"), /amp ○/);
 });
 
 test("directory viewport follows the cursor through a long Unicode path", () => {
