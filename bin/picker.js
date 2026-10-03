@@ -177,7 +177,11 @@ function useCatalog(items) {
 async function lookUpDuplicate() {
   const before = { kind: agent().kind, cwd: state.cwd };
   const found = await runningAgent(originPane);
-  if (!found || agent().kind !== before.kind || state.cwd !== before.cwd) return;
+  if (agent().kind !== before.kind || state.cwd !== before.cwd) return;
+  if (!found) {
+    state.notice ??= "no agent here · starting from your last agent";
+    return scheduleRender();
+  }
   state.agent = initialAgent(found.kind, before.kind);
   if (found.cwd) state.cwd = found.cwd;
   scheduleRender();

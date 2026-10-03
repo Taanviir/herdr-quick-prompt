@@ -1515,6 +1515,11 @@ test("duplicate selects the focused pane's agent and directory over recency and 
   assert.equal(unknown.evaluate("agent().kind"), "gemini", "a kind the catalog lacks falls back to recency");
   assert.equal(unknown.evaluate("state.cwd"), "/tmp");
 
+  const empty = picker(null, { recents: ["gemini"] });
+  await empty.evaluate("lookUpDuplicate()");
+  assert.equal(empty.evaluate("agent().kind"), "gemini");
+  assert.equal(empty.evaluate("state.notice"), "no agent here · starting from your last agent");
+
   const changed = picker(null, { running: { kind: "codex", cwd: "/work/tree" }, recents: ["gemini"] });
   const pending = changed.evaluate("lookUpDuplicate()");
   changed.evaluate("cycleAgent(1)");
