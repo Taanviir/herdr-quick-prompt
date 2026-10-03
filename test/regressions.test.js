@@ -535,7 +535,7 @@ test("launcher finalizes recovery correctly on success, startup failure, and del
     const notifications = [];
     const launcher = load("bin/launch.js", {
       "node:fs": { readFileSync: () => JSON.stringify({ kind: "test", prompt: "keep me" }) },
-      "../lib/state": { finishRequest: (file, success) => finished.push({ file, success }) },
+      "../lib/state": { finishRequest: (file, success) => finished.push({ file, success }), logCrash: () => {} },
       "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), note() {}, finish() {} }) },
       "../lib/agents": { supportsInlinePrompt: () => scenario === "success" },
       "../lib/herdr": {
@@ -564,14 +564,10 @@ test("launcher finalizes recovery correctly on success, startup failure, and del
   }
 });
 
-test("startup timings record stages without prompt text and tolerate logging failures", () => {
+test("startup timings record stages without prompt text", () => {
   const writes = [];
-  const io = {
-    mkdirSync() {}, existsSync: () => false,
-    appendFileSync: (_, text) => writes.push(text),
-  };
   const timing = load("lib/timing.js", {
-    "node:fs": io, "./state": { STATE_DIR: "/tmp/mock-timing" },
+    "./state": { appendLog: (name, text) => writes.push(text) },
   }).context.module.exports;
   const trace = timing.createTiming({ kind: "codex", prompt: "PRIVATE PROMPT", submittedAt: Date.now() - 20 });
   const result = { ok: false, code: "pane_not_ready", message: "PRIVATE ERROR" };
@@ -587,8 +583,61 @@ test("startup timings record stages without prompt text and tolerate logging fai
   assert.ok(saved.dispatchMs >= 0);
   assert.ok(saved.workerMs >= 0);
   assert.equal(writes[0].includes("PRIVATE"), false);
-  io.appendFileSync = () => { throw new Error("disk unavailable"); };
-  assert.doesNotThrow(() => trace.finish(false));
+});
+
+test("logs keep one previous file, and a log that cannot be written is no error", () => {
+  const { dir, api } = stateIn("qp-log-test-");
+  const file = path.join(dir, "crash.log");
+  fs.writeFileSync(file, "x".repeat(300 * 1024));
+  api.logCrash(new TypeError("boom"));
+  assert.equal(fs.readFileSync(`${file}.previous`, "utf8").length, 300 * 1024);
+  assert.match(fs.readFileSync(file, "utf8"), /TypeError: boom\n\s+at /, "the stack, not just the message");
+  fs.rmSync(file);
+  fs.mkdirSync(file);
+  assert.doesNotThrow(() => api.appendLog("crash.log", "unwritable"));
+});
+
+test("the worker logs a bug to crash.log, and leaves Herdr refusing to startup.jsonl", () => {
+  for (const [label, fail, logged] of [
+    ["bug", () => { throw new TypeError("cannot read properties of undefined"); }, true],
+    ["refusal", () => ({ ok: false, code: "agent_exited", message: "gemini exited" }), false],
+  ]) {
+    const crashes = [];
+    class HerdrError extends Error {}
+    const launcher = load("bin/launch.js", {
+      "node:fs": { readFileSync: () => JSON.stringify({ kind: "gemini", prompt: "x" }) },
+      "../lib/state": { finishRequest: () => {}, logCrash: (error) => crashes.push(error) },
+      "../lib/timing": { createTiming: () => null },
+      "../lib/agents": { supportsInlinePrompt: () => false },
+      "../lib/herdr": {
+        HerdrError,
+        notify: () => {},
+        run: (args) => {
+          if (args[0] === "tab") return { ok: true, result: { tab: { tab_id: "w1:t1" }, root_pane: { pane_id: "w1:p1" } } };
+          if (args[1] === "start") return fail();
+          return { ok: true, result: {} };
+        },
+      },
+    }, "try {\n  main();");
+    launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+    launcher.context.process.exit = () => {};
+    const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
+    launcher.evaluate(source.slice(source.indexOf("try {\n  main();")));
+    assert.equal(crashes.length, logged ? 1 : 0, label);
+  }
+});
+
+test("a crash in the popup keeps what was typed without clearing the draft it opened", () => {
+  const ui = picker({ kind: "codex", prompt: "opened with" });
+  ui.context.process.exit = () => {};
+  ui.evaluate("state.prompt = new Editor('typed before the crash'); reportCrash(new Error('boom'))");
+  assert.equal(ui.drafts().prompt, "typed before the crash");
+  assert.match(fs.readFileSync(path.join(ui.dir, "crash.log"), "utf8"), /Error: boom/);
+
+  const empty = picker({ kind: "codex", prompt: "opened with" });
+  empty.context.process.exit = () => {};
+  empty.evaluate("state.prompt = new Editor(''); reportCrash(new Error('boom'))");
+  assert.equal(empty.drafts().prompt, "opened with", "an empty box at crash time is not a deliberate clear");
 });
 
 test("directory arrows override typed parent, while direct Enter uses the typed path", () => {

@@ -156,7 +156,10 @@ Everything lives in the plugin state directory, normally
 | `draft-*.json` | unsent and failed prompts, one per file, dropped after a day |
 | `attachments/` | copied screenshots, deleted after a week |
 | `startup.jsonl` | launch timings, and why a launch failed, without prompt text |
-| `crash.log` | errors from the popup |
+| `crash.log` | errors from the popup and the launcher |
+
+The two logs move to `.previous` once they pass 256 KB, so neither grows for
+ever.
 
 ## From other plugins
 

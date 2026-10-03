@@ -8,7 +8,6 @@
 
 const readline = require("node:readline");
 const path = require("node:path");
-const fs = require("node:fs");
 const { PassThrough } = require("node:stream");
 const { StringDecoder } = require("node:string_decoder");
 
@@ -16,7 +15,7 @@ const { catalog, runningAgent } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
 const { History } = require("../lib/history");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft, logCrash } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
@@ -1150,22 +1149,19 @@ function quit(code) {
   process.exit(code);
 }
 
-/* ---------- boot ---------- */
-
 // A popup that dies takes its output with it: pane commands are not in
 // `herdr plugin log list`, so a crash would otherwise be a window that blinks
-// once and vanishes. Leave a trail.
+// once and vanishes. Leave a trail, and keep what was typed.
 function reportCrash(error) {
-  const detail = error?.stack ?? String(error);
+  logCrash(error);
   try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.appendFileSync(path.join(STATE_DIR, "crash.log"), `${new Date().toISOString()}\n${detail}\n\n`);
-  } catch {
-    // Nothing more we can do from in here.
-  }
+    if (state.prompt.text.trim()) keepDraft();
+  } catch { /* the state that crashed may be what is broken */ }
   notify("Quick Prompt crashed", `${String(error).slice(0, 160)} — see crash.log in ${STATE_DIR}`);
   process.exit(1);
 }
+
+/* ---------- boot ---------- */
 
 process.on("uncaughtException", reportCrash);
 
