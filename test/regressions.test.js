@@ -37,27 +37,87 @@ test("structured readiness errors preserve their code and do not restart an agen
   let calls = 0;
   const launcher = load("bin/launch.js", {
     "../lib/herdr": { run: () => { calls++; return result; } },
-  }, "try {\n  const success = main();");
+  }, "try {\n  main();");
   const started = launcher.evaluate('startAgent("qp-test", "test", "pane", [])');
   assert.equal(started.started, true);
   assert.equal(started.ready, false);
   assert.equal(calls, 1);
 });
 
-test("an agent busy with its inline prompt counts as started after readiness times out", () => {
-  const replies = [
-    { ok: false, code: "timeout", message: "agent did not reach its prompt" },
-    { ok: false, code: "agent_pane_busy", message: "pane already runs an agent" },
-  ];
-  let calls = 0;
+// What a launch in a new tab sends Herdr, with `agent start` timing out the way
+// it did for most launches in the wild: Herdr never registers the agent's name,
+// so anything asked by name comes back agent_not_found.
+function timedOutLaunch(prompt, { kind = "claude", inline = true } = {}) {
+  const calls = [];
+  const records = [];
+  const notifications = [];
   const launcher = load("bin/launch.js", {
-    "../lib/herdr": { run: () => replies[calls++] },
-  }, "try {\n  const success = main();");
+    "node:fs": { readFileSync: () => JSON.stringify({ kind, prompt }) },
+    "../lib/state": { finishRequest: () => {} },
+    "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), note: (fields) => records.push(fields), finish: (...args) => records.push(args) }) },
+    "../lib/agents": { supportsInlinePrompt: () => inline },
+    "../lib/herdr": {
+      HerdrError: Error,
+      notify: (...args) => notifications.push(args),
+      run: (args) => {
+        calls.push(args);
+        if (args[0] === "tab") return { ok: true, result: { tab: { tab_id: "w9:t1" }, root_pane: { pane_id: "w9:p1" } } };
+        if (args[1] === "start") return { ok: false, code: "timeout", message: "timed out waiting for the agent" };
+        if (args[0] === "agent" && ["wait", "get", "prompt", "read"].includes(args[1]) && args[2] !== "w9:p1") {
+          return { ok: false, code: "agent_not_found", message: `agent ${args[2]} not found` };
+        }
+        if (args[1] === "get") return { ok: true, result: { agent: { interactive_ready: true, agent_status: "working" } } };
+        return { ok: true, result: {} };
+      },
+    },
+  }, "try {\n  main();");
+  launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  launcher.context.process.exit = () => {};
   launcher.evaluate("sleep = () => {}");
-  const started = launcher.evaluate('startAgent("qp-claude", "claude", "pane", ["do the thing"])');
-  assert.equal(started.started, true);
-  assert.equal(started.ready, false);
-  assert.equal(calls, 2);
+  const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
+  launcher.evaluate(source.slice(source.indexOf("try {\n  main();")));
+  return { calls, records, notifications };
+}
+
+test("an agent start that times out is a slow agent, and it is followed by its pane", () => {
+  const { calls, records, notifications } = timedOutLaunch("one\ntwo");
+  const starts = calls.filter((args) => args[1] === "start");
+  assert.equal(starts.length, 1, "a timeout is not retried into agent_pane_busy");
+  assert.equal(starts[0][starts[0].indexOf("--timeout") + 1], "15000");
+  const followed = calls.filter((args) => args[0] === "agent" && ["wait", "get", "prompt"].includes(args[1]));
+  assert.ok(followed.length >= 3);
+  assert.ok(followed.every((args) => args[2] === "w9:p1"), "never by a name Herdr may not have registered");
+  assert.deepEqual(notifications, []);
+  assert.deepEqual([...records.at(-1)], [true]);
+  assert.deepEqual({ ...records[0] }, { inline: false });
+});
+
+test("an inline prompt gets a short start timeout, and a timeout there means it is at work", () => {
+  const { calls, records, notifications } = timedOutLaunch("fix the login bug");
+  const starts = calls.filter((args) => args[1] === "start");
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0][starts[0].indexOf("--timeout") + 1], "3000");
+  assert.equal(starts[0].at(-1), "fix the login bug");
+  assert.equal(calls.some((args) => args[1] === "prompt"), false, "nothing is typed on top of it");
+  assert.deepEqual(notifications, []);
+  assert.deepEqual({ ...records[0] }, { inline: true });
+});
+
+test("a failed launch records why in startup.jsonl, without the prompt or the agent's title", () => {
+  const records = [];
+  const followUp = load("bin/launch.js", {
+    "node:fs": { readFileSync: () => JSON.stringify({ kind: "codex", prompt: "PRIVATE PROMPT", followUp: { target: "w1:p2", title: "PRIVATE TITLE" } }) },
+    "../lib/state": { finishRequest: () => {} },
+    "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), note() {}, finish: (...args) => records.push(args) }) },
+    "../lib/herdr": { HerdrError: Error, notify: () => {}, run: () => ({ ok: false, code: "agent_blocked", message: "agent is blocked" }) },
+  }, "try {\n  main();");
+  followUp.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  followUp.context.process.exit = () => {};
+  const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
+  followUp.evaluate(source.slice(source.indexOf("try {\n  main();")));
+  assert.equal(records[0][0], false);
+  assert.match(records[0][1], /agent is blocked/);
+  assert.doesNotMatch(records[0][1], /PRIVATE/);
 });
 
 // Temporary directories, removed once every test has run.
@@ -159,9 +219,9 @@ test("the worktree destination branches from the prompt and starts the agent in 
         return { ok: true, result: {} };
       },
     },
-  }, "try {\n  const success = main();");
+  }, "try {\n  main();");
   launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
-  assert.equal(launcher.evaluate("main()"), true);
+  assert.doesNotThrow(() => launcher.evaluate("main()"));
   const created = calls.find((args) => args[0] === "worktree");
   assert.equal(created.join(" "), "worktree create --cwd /repo --branch fix-the-login-bug-2 --label fix-the-login-bug-2 --focus");
   const started = calls.find((args) => args[1] === "start");
@@ -351,11 +411,11 @@ test("a multiline prompt is typed in, since Herdr refuses newlines in launch arg
         return { ok: true, result: {} };
       },
     },
-  }, "try {\n  const success = main();");
+  }, "try {\n  main();");
   launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
   launcher.evaluate("waitInteractive = () => true");
-  launcher.context.deliverPrompt = (_, prompt) => delivered.push(prompt) > 0;
-  assert.equal(launcher.evaluate("main()"), true);
+  launcher.context.deliverPrompt = (_, __, prompt) => delivered.push(prompt);
+  assert.doesNotThrow(() => launcher.evaluate("main()"));
   assert.equal(starts.length, 1);
   assert.equal(starts[0].includes("--"), false);
   assert.deepEqual(delivered, ["one\ntwo"]);
@@ -370,7 +430,7 @@ test("a launch argument Herdr cannot encode is not retried", () => {
         return { ok: false, code: "invalid_agent_argument", message: "agent arguments cannot be encoded safely for the target shell" };
       },
     },
-  }, "try {\n  const success = main();");
+  }, "try {\n  main();");
   launcher.evaluate("sleep = () => {}");
   const started = launcher.evaluate('startAgent("qp-claude", "claude", "pane", ["do the thing"])');
   assert.equal(started.started, false);
@@ -384,7 +444,7 @@ test("launcher finalizes recovery correctly on success, startup failure, and del
     const launcher = load("bin/launch.js", {
       "node:fs": { readFileSync: () => JSON.stringify({ kind: "test", prompt: "keep me" }) },
       "../lib/state": { finishRequest: (file, success) => finished.push({ file, success }) },
-      "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), finish() {} }) },
+      "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), note() {}, finish() {} }) },
       "../lib/agents": { supportsInlinePrompt: () => scenario === "success" },
       "../lib/herdr": {
         HerdrError: Error,
@@ -400,12 +460,12 @@ test("launcher finalizes recovery correctly on success, startup failure, and del
           return { ok: true, result: {} };
         },
       },
-    }, "try {\n  const success = main();");
+    }, "try {\n  main();");
     launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
     launcher.context.process.exit = () => {};
-    launcher.evaluate("waitInteractive = () => true; deliverPrompt = () => false");
+    launcher.evaluate("waitInteractive = () => true; deliverPrompt = () => { throw new Error(\"test did not accept the prompt\") }");
     const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
-    launcher.evaluate(source.slice(source.indexOf("try {\n  const success = main();")));
+    launcher.evaluate(source.slice(source.indexOf("try {\n  main();")));
     assert.equal(finished.length, 1, scenario);
     assert.equal(finished[0].success, scenario === "success", scenario);
     if (scenario !== "success") assert.match(notifications.at(-1)[1], /recover your draft/, scenario);
@@ -425,8 +485,11 @@ test("startup timings record stages without prompt text and tolerate logging fai
   const result = { ok: false, code: "pane_not_ready", message: "PRIVATE ERROR" };
   assert.equal(trace.measure("agent start", () => result), result);
   assert.throws(() => trace.measure("tab create", () => { throw new Error("PRIVATE EXCEPTION"); }));
-  trace.finish(false);
+  trace.note({ inline: true });
+  trace.finish(false, "agent did not start");
   const saved = JSON.parse(writes[0]);
+  assert.equal(saved.inline, true);
+  assert.equal(saved.error, "agent did not start");
   assert.equal(saved.steps[0].code, "pane_not_ready");
   assert.equal(saved.steps[1].ok, false);
   assert.ok(saved.dispatchMs >= 0);
@@ -718,10 +781,10 @@ test("model flags go ahead of the inline prompt and survive falling back to typi
           return { ok: true, result: {} };
         },
       },
-    }, "try {\n  const success = main();");
+    }, "try {\n  main();");
     launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
-    launcher.evaluate("waitInteractive = () => true; deliverPrompt = () => true");
-    assert.equal(launcher.evaluate("main()"), true);
+    launcher.evaluate("waitInteractive = () => true; deliverPrompt = () => {}");
+    assert.doesNotThrow(() => launcher.evaluate("main()"));
     const flags = ["-m", "gpt-5.5", "-c", "model_reasoning_effort=low"];
     if (prompt === "one line") assert.deepEqual(starts, [[...flags, prompt], flags]);
     else assert.deepEqual(starts, [flags]);
@@ -797,11 +860,11 @@ test("the launcher sends the preset's prefix and postfix around the typed prompt
         ? { ok: true, result: { root_pane: { pane_id: "test-pane" } } }
         : { ok: true, result: {} },
     },
-  }, "try {\n  const success = main();");
+  }, "try {\n  main();");
   launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
   launcher.evaluate("waitInteractive = () => true");
-  launcher.context.deliverPrompt = (_, prompt) => delivered.push(prompt) > 0;
-  assert.equal(launcher.evaluate("main()"), true);
+  launcher.context.deliverPrompt = (_, __, prompt) => delivered.push(prompt);
+  assert.doesNotThrow(() => launcher.evaluate("main()"));
   assert.deepEqual(delivered, ["Review:\n\nthe auth module\n\nBe brief."]);
 });
 
@@ -1015,11 +1078,11 @@ test("the worker sends a follow-up to the running agent without starting anythin
           return ok ? { ok: true, result: {} } : { ok: false, code: "agent_blocked", message: "agent is blocked" };
         },
       },
-    }, "try {\n  const success = main();");
+    }, "try {\n  main();");
     launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
     launcher.context.process.exit = () => {};
     const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
-    launcher.evaluate(source.slice(source.indexOf("try {\n  const success = main();")));
+    launcher.evaluate(source.slice(source.indexOf("try {\n  main();")));
 
     assert.equal(calls.length, 1, "no tab, no agent start, no list");
     assert.deepEqual([...calls[0].slice(0, 4)], ["agent", "prompt", "w1:p2", "one\ntwo"]);

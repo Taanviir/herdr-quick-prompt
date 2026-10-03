@@ -15,6 +15,11 @@ const { branchName, uniqueBranch } = require("../lib/worktree");
 
 const START_ATTEMPTS = 12;
 const START_RETRY_MS = 400;
+const START_TIMEOUT_MS = 15000;
+// An agent handed its prompt inline goes straight to work on it and may never
+// look ready to Herdr, while a launch argument Herdr refuses comes back within
+// milliseconds. A short wait tells the two apart.
+const INLINE_START_TIMEOUT_MS = 3000;
 const READY_TIMEOUT_MS = 120000;
 const READY_POLL_MS = 400;
 const READY_POLLS = 40;
@@ -40,6 +45,12 @@ function sleep(ms) {
 function readRequest(file) {
   const request = JSON.parse(fs.readFileSync(file, "utf8"));
   return request;
+}
+
+// `message` is for the notification. startup.jsonl gets `logged`, since it must
+// never hold prompt text and an agent's title is often a summary of its prompt.
+function failure(message, logged = message) {
+  return Object.assign(new HerdrError(message), { logged });
 }
 
 // Names must match [a-z][a-z0-9_-]{0,31} and be unique among live agents.
@@ -130,8 +141,8 @@ function createTarget(request) {
 // `agentArgs` are passed through to the agent's own CLI after `--`. An inline
 // prompt goes last among them, which hands the agent its prompt before its TUI
 // even paints.
-function startAgent(name, kind, pane, agentArgs) {
-  const args = ["agent", "start", name, "--kind", kind, "--pane", pane];
+function startAgent(name, kind, pane, agentArgs, timeoutMs) {
+  const args = ["agent", "start", name, "--kind", kind, "--pane", pane, "--timeout", String(timeoutMs)];
   if (agentArgs.length > 0) args.push("--", ...agentArgs);
 
   let last = "agent did not start";
@@ -141,13 +152,14 @@ function startAgent(name, kind, pane, agentArgs) {
     if (res.ok) return { started: true, ready: true };
 
     last = res.message;
-    // Startup reached the agent but it is not idle: a trust dialog, or an
-    // inline prompt it is already working on. `agent_pane_busy` on a pane this
-    // launch created is the same agent, seen by a retry after readiness timed
-    // out. Either way the name is live.
+    // The agent is running but not idle: a trust dialog, an inline prompt it is
+    // already working on, or simply slower than the timeout. `agent_pane_busy`
+    // on a pane this launch created is the same agent, seen by a retry.
     const reason = `${res.code ?? ""} ${last}`;
     if (res.code === "invalid_agent_argument") break;
-    if (/agent_not_ready|agent_pane_busy/i.test(reason)) return { started: true, ready: false, message: last };
+    if (res.code === "timeout" || /agent_not_ready|agent_pane_busy/i.test(reason)) {
+      return { started: true, ready: false, message: last };
+    }
     if (!/pane|shell|prompt|busy|not_available/i.test(reason)) break;
     sleep(START_RETRY_MS);
   }
@@ -166,47 +178,42 @@ function main() {
   const { kind } = request;
 
   const name = uniqueName(kind);
+  // From here on the agent is addressed by its pane. Herdr accepts either, and
+  // an `agent start` that times out may never have registered the name.
   const pane = createTarget(request);
 
   // Herdr refuses a launch argument with a newline in it, so multiline prompts
   // are typed in instead.
   const inline = prompt && !prompt.includes("\n") && supportsInlinePrompt(kind) ? prompt : null;
+  timing?.note({ inline: Boolean(inline) });
   const options = modelArgs(kind, request);
   let delivered = Boolean(inline);
-  let started = startAgent(name, kind, pane, inline ? [...options, inline] : options);
+  let started = inline
+    ? startAgent(name, kind, pane, [...options, inline], INLINE_START_TIMEOUT_MS)
+    : startAgent(name, kind, pane, options, START_TIMEOUT_MS);
 
   // The agent rejected the inline prompt rather than failing to start; try
   // again without it and fall back to typing the prompt in.
   if (!started.started && inline) {
     delivered = false;
-    started = startAgent(name, kind, pane, options);
+    timing?.note({ inline: false });
+    started = startAgent(name, kind, pane, options, START_TIMEOUT_MS);
   }
   if (!started.started) throw new HerdrError(started.message);
 
   // Delivered at launch: nothing left to type.
-  if (delivered || !prompt) return true;
+  if (delivered || !prompt) return;
 
   if (!started.ready) {
     // Blocked on a trust or login dialog; wait for the user to clear it.
-    const waited = run(["agent", "wait", name, "--until", "idle", "--timeout", String(READY_TIMEOUT_MS)], {
+    const waited = run(["agent", "wait", pane, "--until", "idle", "--timeout", String(READY_TIMEOUT_MS)], {
       check: false,
     });
-    if (waited.ok === false) {
-      notify("Quick Prompt", `${kind} needs attention. Reopen Quick Prompt to recover your draft.`);
-      return false;
-    }
+    if (waited.ok === false) throw failure(`${kind} needs attention: ${waited.message}`);
   }
 
-  if (!waitInteractive(name)) {
-    notify("Quick Prompt", `${kind} never became ready. Reopen Quick Prompt to recover your draft.`);
-    return false;
-  }
-
-  if (!deliverPrompt(name, prompt)) {
-    notify("Quick Prompt", `${kind} did not accept the prompt. Reopen Quick Prompt to recover your draft.`);
-    return false;
-  }
-  return true;
+  if (!waitInteractive(pane)) throw failure(`${kind} never became ready`);
+  deliverPrompt(pane, kind, prompt);
 }
 
 // The agent is past its startup repaint, so the keystrokes are not at risk the
@@ -217,20 +224,19 @@ function followUp({ target, title }, prompt) {
     "agent", "prompt", target, prompt,
     "--wait", "--until", "working", "--until", "blocked", "--timeout", String(FOLLOW_UP_TIMEOUT_MS),
   ], { check: false });
-  if (sent.ok) return true;
-
-  notify("Quick Prompt", `${title} did not take the follow-up: ${sent.message}. Reopen Quick Prompt to recover your draft.`);
-  return false;
+  if (!sent.ok) {
+    throw failure(`${title} did not take the follow-up: ${sent.message}`, `follow-up not taken: ${sent.message}`);
+  }
 }
 
-function agentState(name) {
-  const res = run(["agent", "get", name], { check: false });
+function agentState(pane) {
+  const res = run(["agent", "get", pane], { check: false });
   return res.ok ? res.result?.agent ?? {} : {};
 }
 
-function waitInteractive(name) {
+function waitInteractive(pane) {
   for (let poll = 0; poll < READY_POLLS; poll += 1) {
-    if (agentState(name).interactive_ready) return true;
+    if (agentState(pane).interactive_ready) return true;
     sleep(READY_POLL_MS);
   }
   return false;
@@ -238,27 +244,26 @@ function waitInteractive(name) {
 
 // `agent prompt` can report success while the agent's startup repaint eats the
 // keystrokes, so confirm the text actually landed before giving up on it.
-function deliverPrompt(name, prompt) {
+function deliverPrompt(pane, kind, prompt) {
   for (let attempt = 0; attempt < DELIVERY_ATTEMPTS; attempt += 1) {
     sleep(SETTLE_MS);
 
-    const sent = run(["agent", "prompt", name, prompt], { check: false });
+    const sent = run(["agent", "prompt", pane, prompt], { check: false });
     if (sent.ok === false && !/stalled|blocked|not_ready|busy/i.test(`${sent.code ?? ""} ${sent.message}`)) {
-      notify("Quick Prompt", `Could not send the prompt: ${sent.message}`);
-      return false;
+      throw failure(`could not send the prompt to ${kind}: ${sent.message}`);
     }
 
     sleep(SETTLE_MS);
-    if (promptLanded(name, prompt)) return true;
+    if (promptLanded(pane, prompt)) return;
   }
-  return false;
+  throw failure(`${kind} did not accept the prompt`);
 }
 
-function promptLanded(name, prompt) {
-  const status = agentState(name).agent_status;
+function promptLanded(pane, prompt) {
+  const status = agentState(pane).agent_status;
   if (status === "working" || status === "blocked") return true;
 
-  const res = run(["agent", "read", name, "--source", "detection", "--lines", "60"], { check: false });
+  const res = run(["agent", "read", pane, "--source", "detection", "--lines", "60"], { check: false });
   if (!res.ok) return false;
 
   const screen = (res.result?.text ?? res.stdout ?? "").replace(/\s+/g, " ");
@@ -267,12 +272,13 @@ function promptLanded(name, prompt) {
 }
 
 try {
-  const success = main();
-  timing?.finish(success);
-  finishRequest(process.argv[2], success);
+  main();
+  timing?.finish(true);
+  finishRequest(process.argv[2], true);
 } catch (error) {
-  timing?.finish(false);
+  const message = error.message ?? String(error);
+  timing?.finish(false, error.logged ?? message);
   finishRequest(process.argv[2], false);
-  notify("Quick Prompt failed", `${error.message ?? String(error)} — reopen Quick Prompt to recover your draft.`);
+  notify("Quick Prompt failed", `${message} — reopen Quick Prompt to recover your draft.`);
   process.exit(1);
 }
