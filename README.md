@@ -156,6 +156,7 @@ Everything lives in the plugin state directory, normally
 | `draft-*.json` | unsent and failed prompts, one per file, dropped after a day |
 | `attachments/` | copied screenshots, deleted after a week |
 | `catalog.json` | the agents Herdr supports and which are installed, so the popup opens without asking again |
+| `clipboard.json` | which clipboard tool worked for `ctrl+v` |
 | `startup.jsonl` | launch timings, and why a launch failed, without prompt text |
 | `crash.log` | errors from the popup and the launcher |
 
