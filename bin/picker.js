@@ -24,7 +24,7 @@ const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 const { modelsFor, effortsFor, normalize, modelLabel } = require("../lib/models");
 const { PRESETS, readPresets, composePrompt } = require("../lib/presets");
-const { insideRepo } = require("../lib/worktree");
+const { insideRepo, branchSlug } = require("../lib/worktree");
 const { runningAgents, matches } = require("../lib/running");
 const scratchpad = require("../lib/scratchpad");
 
@@ -291,7 +291,7 @@ function promptBlock(lines, top, rows, inner) {
 function destinationRow(inner) {
   const join = ` ${style.dim("·")} `;
   const row = (model) => {
-    const parts = [`${destination().label} ${style.dim("(ctrl+t)")}`, model].filter(Boolean);
+    const parts = [`${destinationLabel()} ${style.dim("(ctrl+t)")}`, model].filter(Boolean);
     return `${style.dim("→")} ${parts.join(join)}${join}`;
   };
   const tail = ` ${style.dim("(ctrl+d)")}`;
@@ -302,6 +302,13 @@ function destinationRow(inner) {
   if (room(head) < 12) head = row(label);
 
   return `${head}${shortenPath(state.cwd, Math.max(12, room(head)))}${tail}`;
+}
+
+// The branch is the cheap guess; the launch makes it unique.
+function destinationLabel() {
+  if (destination().id !== "worktree") return destination().label;
+  const branch = branchSlug(state.prompt.text, state.preset);
+  return `${destination().label} ${style.dim("·")} ${branch || style.dim("random branch")}`;
 }
 
 function presetRow() {
