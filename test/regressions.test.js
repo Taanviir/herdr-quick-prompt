@@ -870,6 +870,65 @@ test("the key that opens a list closes it, and esc clears a filter before closin
   assert.equal(ui.evaluate("state.overlay"), null);
 });
 
+test("the hint line suits the moment: ways to fill an empty prompt, ways to send a typed one", () => {
+  const { displayWidth } = require("../lib/text");
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(null, { runningList: parseAgents({ agents: LISTED }) });
+  assert.equal(ui.evaluate("hints(71)"), "ctrl+p presets · ctrl+r follow up · ctrl+g keys");
+  const withHistory = picker(null, { history: [{ text: "older" }] });
+  assert.equal(withHistory.evaluate("hints(71)"), "↑ history · ctrl+p presets · ctrl+r follow up · ctrl+g keys");
+  ui.evaluate("state.prompt = new Editor('fix it')");
+  assert.equal(ui.evaluate("hints(71)"), "⏎ launch · ctrl+l launch & stay · shift+⏎ newline · esc close");
+  assert.equal(ui.evaluate("hints(30)"), "⏎ launch · esc close", "a narrow popup keeps the first and last");
+  const scratchpad = { available: () => true, save: () => assert.fail("not saved") };
+  const notes = picker(null, { scratchpad });
+  notes.evaluate("state.prompt = new Editor('fix it')");
+  assert.equal(notes.evaluate("hints(80)"), "⏎ launch · ctrl+l launch & stay · ctrl+s note · shift+⏎ newline · esc close");
+  assert.equal(notes.evaluate("hints(60)"), "⏎ launch · ctrl+l launch & stay · ctrl+s note · esc close", "the note outlasts the newline");
+  const handedOver = picker(null, { scratchpad, env: { QUICK_PROMPT_TEXT: "from notes" } });
+  assert.doesNotMatch(handedOver.evaluate("hints(80)"), /ctrl\+s/, "a handed-over prompt is a note already");
+  ui.evaluate("openRunning(); onRunningKey('\\r', {name: 'return'})");
+  assert.match(ui.evaluate("hints(71)"), /^⏎ send · ctrl\+r other agent .* esc back · ctrl\+g keys$/);
+  for (const width of [40, 71]) {
+    for (const line of [...ui.evaluate(`mainBody(${width}, 16)`).lines]) assert.ok(displayWidth(line) <= width);
+  }
+});
+
+test("ctrl+g lists every key, and closes again", () => {
+  const { displayWidth } = require("../lib/text");
+  const ui = picker();
+  ui.evaluate("onKey('\\x07', {ctrl: true, name: 'g'})");
+  assert.equal(ui.evaluate("state.overlay.type"), "help");
+  const text = ui.evaluate("helpBody(71, 16)").lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+  for (const key of ["ctrl+l", "ctrl+s", "shift+⏎", "ctrl+k", "ctrl+t", "ctrl+d", "ctrl+o", "ctrl+p", "ctrl+x", "ctrl+r", "ctrl+v", "ctrl+u", "ctrl+y", "alt+1", "esc"]) {
+    assert.ok(text.includes(key), key);
+  }
+  ui.evaluate("onKey('', {name: 'down'}); onKey('', {name: 'down'})");
+  const narrow = [...ui.evaluate("helpBody(40, 16)").lines];
+  assert.ok(narrow.every((line) => displayWidth(line) <= 40));
+  assert.match(narrow[2], /new line/, "one column scrolls");
+  ui.evaluate("onKey('\\x07', {ctrl: true, name: 'g'})");
+  assert.equal(ui.evaluate("state.overlay"), null);
+});
+
+test("the rows around the prompt say where you are in history and what is scrolled away", () => {
+  const ui = picker(null, { history: [{ text: Array.from({ length: 14 }, (_, n) => `line ${n + 1}`).join("\n") }, { text: "older" }] });
+  const plain = () => [...ui.evaluate("mainBody(71, 16)").lines].map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.equal(plain()[2], "");
+  ui.evaluate("onMainKey(undefined, {name: 'up'})");
+  assert.match(plain()[2], /history 1\/2 · ↑ 4 more$/);
+  for (let i = 0; i < 13; i += 1) ui.evaluate("onMainKey(undefined, {name: 'up'})");
+  assert.match(plain()[2], /^ +history 1\/2$/);
+  assert.match(plain()[13], /─ ↓ 4 more ──$/);
+  ui.evaluate("onMainKey(undefined, {name: 'up'})");
+  assert.match(plain()[2], /history 2\/2$/);
+});
+
+test("the chip row says how many more agents ctrl+k has", () => {
+  const ui = picker(null, { installed: ["claude", "codex"] });
+  assert.match(ui.evaluate("chipRow(71)").replace(/\x1b\[[0-9;]*m/g, ""), /\+4 more · ctrl\+k$/);
+});
+
 test("ctrl+y puts back what ctrl+u cleared, at the cursor", () => {
   const ui = picker();
   ui.evaluate("state.prompt = new Editor('fix the login bug'); onMainKey('', {ctrl: true, name: 'u'})");
@@ -1228,7 +1287,7 @@ test("ctrl+o picks a model and effort for the selected agent only", () => {
   const { displayWidth } = require("../lib/text");
   const ui = picker();
   ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex')");
-  assert.match(ui.evaluate("destinationRow(71)"), /default model/);
+  assert.doesNotMatch(ui.evaluate("destinationRow(71)"), /model|ctrl+o/, "the default model leaves the row to the path");
   ui.evaluate("onMainKey('\\x0f', {ctrl: true, name: 'o'})");
   assert.equal(ui.evaluate("state.overlay.type"), "model");
   ui.evaluate("onModelKey('', {name: 'down'}); onModelKey('', {name: 'right'}); onModelKey('', {name: 'right'})");
@@ -1246,7 +1305,7 @@ test("ctrl+o picks a model and effort for the selected agent only", () => {
   assert.ok(displayWidth(row) <= 71, "a long model name must not push the row past the popup");
 
   ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'claude')");
-  assert.match(ui.evaluate("destinationRow(71)"), /default model/, "each kind keeps its own choice");
+  assert.doesNotMatch(ui.evaluate("destinationRow(71)"), /gpt|model/, "each kind keeps its own choice");
   ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'gemini'); onMainKey('\\x0f', {ctrl: true, name: 'o'})");
   assert.equal(ui.evaluate("state.overlay"), null);
   assert.match(ui.evaluate("state.notice"), /no model choice for gemini/);

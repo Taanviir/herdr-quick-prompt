@@ -118,7 +118,7 @@ const state = {
   followUp: draft?.followUp ?? null, // the running agent Enter sends to, instead of launching
   models: draftModel ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
   killed: "", // what ctrl+u last cleared, for ctrl+y
-  overlay: null, // { type: "agents" | "dirs" | "presets" | "model" | "running", ... } while a picker is open
+  overlay: null, // { type: "agents" | "dirs" | "presets" | "model" | "running" | "help", ... } while one is open
   notice: handoff ? `From ${process.env.QUICK_PROMPT_SOURCE || "another plugin"} · ⏎ launch · ctrl+r follow up instead`
     : draft?.failed ? `Recovered failed ${draft.followUp ? "follow-up" : "launch"} · edit or Enter to retry · ctrl+u clear`
     : draft ? "Restored draft · ctrl+u clear" : null,
@@ -230,14 +230,34 @@ function render() {
 function mainBody(inner, rows) {
   const lines = new Array(rows).fill("");
   lines[1] = state.followUp ? followUpRow(inner) : chipRow(inner);
-  if (state.preset) lines[2] = presetRow();
 
-  const caret = promptBlock(lines, 3, Math.max(1, rows - 6), inner);
+  const { caret, above, below } = promptBlock(lines, 3, Math.max(1, rows - 6), inner);
+  lines[2] = statusRow(inner, above);
 
-  lines[rows - 3] = style.dim("─".repeat(inner));
+  lines[rows - 3] = rule(inner, below);
   lines[rows - 2] = state.followUp ? followUpWhere(inner) : destinationRow(inner);
-  lines[rows - 1] = state.notice ? style.warn(state.notice) : style.dim(hints());
+  lines[rows - 1] = state.notice ? style.warn(state.notice) : style.dim(hints(inner));
   return { lines, caret };
+}
+
+// Above the prompt: the preset on the left, and on the right where you are in
+// history and how much of a long prompt is scrolled out of view.
+function statusRow(inner, above) {
+  const notes = [];
+  if (state.history.position) notes.push(`history ${state.history.position}/${state.history.entries.length}`);
+  if (above) notes.push(`↑ ${above} more`);
+  const right = style.dim(notes.join(" · "));
+  if (!state.preset) return notes.length ? " ".repeat(Math.max(0, inner - displayWidth(right))) + right : "";
+
+  let left = presetRow(true);
+  if (displayWidth(left) + displayWidth(right) + 1 > inner) left = presetRow(false);
+  return left + " ".repeat(Math.max(1, inner - displayWidth(left) - displayWidth(right))) + right;
+}
+
+function rule(inner, below) {
+  if (!below) return style.dim("─".repeat(inner));
+  const label = ` ↓ ${below} more `;
+  return style.dim(`${"─".repeat(Math.max(0, inner - displayWidth(label) - 2))}${label}──`);
 }
 
 function chipRow(inner) {
@@ -245,7 +265,7 @@ function chipRow(inner) {
   const label = (item, index) => `${index < SHORTCUTS ? `${index + 1} ` : ""}${item.kind}${missing(item.kind)}`;
 
   const hint = noneInstalled ? "no agent found on PATH · ctrl+k" : "ctrl+k";
-  const room = inner - hint.length - 6;
+  const room = inner - displayWidth(`+${agents.length} more · ${hint}`) - 1;
 
   const shown = [];
   let used = 0;
@@ -279,7 +299,7 @@ function chipRow(inner) {
     .join(" ");
 
   const hidden = agents.length - shown.length;
-  const tail = noneInstalled ? style.warn(hint) : style.dim(hidden > 0 ? `+${hidden} ${hint}` : hint);
+  const tail = noneInstalled ? style.warn(hint) : style.dim(hidden > 0 ? `+${hidden} more · ${hint}` : hint);
   const gap = Math.max(1, inner - displayWidth(row) - displayWidth(tail));
   return row + " ".repeat(gap) + tail;
 }
@@ -293,45 +313,137 @@ function promptBlock(lines, top, rows, inner) {
     lines[top + index] = marker + style.bright(line);
   });
 
-  return { row: top + (caret.row - from), col: 2 + caret.col };
+  return {
+    caret: { row: top + (caret.row - from), col: 2 + caret.col },
+    above: from,
+    below: Math.max(0, wrapped.length - from - rows),
+  };
 }
 
 // The popup's title bar has no room for the working directory, so it rides along
 // with the destination: what will happen, with which model, and where, each next
-// to the key that changes it. A long model name gives up its key hint before the
-// path is squeezed below legibility.
+// to the key that changes it. The model only shows once it is not the default.
+// Before the path is squeezed below legibility, the row gives up the model's
+// key hint, then the destination's, and then a worktree branch's length.
+const PATH_ROOM = 12;
+
 function destinationRow(inner) {
   const join = ` ${style.dim("·")} `;
-  const row = (model) => {
-    const parts = [`${destinationLabel()} ${style.dim("(ctrl+t)")}`, model].filter(Boolean);
+  const tail = ` ${style.dim("(ctrl+d)")}`;
+  const picked = choice();
+  const model = picked && (picked.model || picked.effort) ? modelLabel(picked) : null;
+  const branch = destination().id === "worktree" ? branchSlug(state.prompt.text, state.preset) || null : null;
+
+  const head = ({ modelKey = true, branchWidth = Infinity, destinationKey = true } = {}) => {
+    const where = destination().id === "worktree"
+      ? `${destination().label} ${style.dim("·")} ${branch ? truncate(branch, branchWidth) : style.dim("random branch")}`
+      : destination().label;
+    const parts = [
+      destinationKey ? `${where} ${style.dim("(ctrl+t)")}` : where,
+      model && (modelKey ? `${model} ${style.dim("(ctrl+o)")}` : model),
+    ].filter(Boolean);
     return `${style.dim("→")} ${parts.join(join)}${join}`;
   };
-  const tail = ` ${style.dim("(ctrl+d)")}`;
-  const room = (head) => inner - displayWidth(head) - displayWidth(tail);
+  const room = (text) => inner - displayWidth(text) - displayWidth(tail);
 
-  const label = choice() && modelLabel(choice());
-  let head = row(label && `${label} ${style.dim("(ctrl+o)")}`);
-  if (room(head) < 12) head = row(label);
+  let chosen = head();
+  if (room(chosen) < PATH_ROOM) chosen = head({ modelKey: false });
+  if (room(chosen) < PATH_ROOM) chosen = head({ modelKey: false, destinationKey: false });
+  if (room(chosen) < PATH_ROOM && branch) {
+    const branchWidth = Math.max(8, displayWidth(branch) - (PATH_ROOM - room(chosen)));
+    chosen = head({ modelKey: false, destinationKey: false, branchWidth });
+  }
 
-  return `${head}${shortenPath(state.cwd, Math.max(12, room(head)))}${tail}`;
+  return `${chosen}${shortenPath(state.cwd, Math.max(PATH_ROOM, room(chosen)))}${tail}`;
 }
 
-// The branch is the cheap guess; the launch makes it unique.
-function destinationLabel() {
-  if (destination().id !== "worktree") return destination().label;
-  const branch = branchSlug(state.prompt.text, state.preset);
-  return `${destination().label} ${style.dim("·")} ${branch || style.dim("random branch")}`;
+function presetRow(withKeys) {
+  const name = `${style.dim("preset")} ${style.accent(state.preset.name)}`;
+  return withKeys ? `${name}  ${style.dim("ctrl+p change · ctrl+x clear")}` : name;
 }
 
-function presetRow() {
-  return `${style.dim("preset")} ${style.accent(state.preset.name)}  ${style.dim("ctrl+p change · ctrl+x clear")}`;
+// What the next key is likely to be: on an empty prompt, ways to fill it; once
+// typing, ways to send it. Everything else is behind ctrl+g.
+function hints(inner) {
+  let parts;
+  if (state.followUp) {
+    parts = ["⏎ send", "ctrl+r other agent", "shift+⏎ newline", "esc back", "ctrl+g keys"];
+  } else if (state.prompt.isEmpty) {
+    const verb = composePrompt(state.preset, "") ? "⏎ launch" : null;
+    const history = state.history.entries.length ? "↑ history" : null;
+    parts = [verb, history, "ctrl+p presets", "ctrl+r follow up", "ctrl+g keys"].filter(Boolean);
+  } else {
+    parts = ["⏎ launch", "ctrl+l launch & stay", canSaveNote && "ctrl+s note", "shift+⏎ newline", "esc close"].filter(Boolean);
+  }
+  return fit(parts, inner);
 }
 
-function hints() {
-  if (state.followUp) return "⏎ send · ctrl+r other agent · ctrl+v paste · \\⏎ newline · esc back";
-  const verb = composePrompt(state.preset, state.prompt.text) ? "⏎ launch" : "⏎ open agent";
-  if (canSaveNote) return `${verb} · tab agent · ctrl+r follow up · ctrl+s note · esc cancel`;
-  return `${verb} · tab agent · ctrl+r follow up · \\⏎ newline · esc cancel`;
+// Keeps the first and last, dropping from just before the last until it fits.
+function fit(parts, width) {
+  const kept = [...parts];
+  while (kept.length > 2 && displayWidth(kept.join(" · ")) > width) kept.splice(-2, 1);
+  return kept.join(" · ");
+}
+
+/* ---------- every key ---------- */
+
+const KEYS = [
+  ["⏎", "launch"],
+  ["ctrl+l", "launch, stay here"],
+  ["shift+⏎ \\⏎", "new line"],
+  ["↑ ↓", "lines, then history"],
+  ["tab alt+1…9", "next or Nth agent"],
+  ["ctrl+k", "every agent"],
+  ["ctrl+t", "where it opens"],
+  ["ctrl+d", "directory"],
+  ["ctrl+o", "model and effort"],
+  ["ctrl+p ctrl+x", "preset, remove it"],
+  ["ctrl+r", "follow up an agent"],
+  ["ctrl+s", "save as a note"],
+  ["ctrl+v", "paste clipboard"],
+  ["ctrl+u ctrl+y", "clear, bring back"],
+  ["ctrl+w", "delete a word"],
+  ["ctrl+a ctrl+e", "line start, end"],
+  ["esc", "close, keep draft"],
+];
+
+function helpBody(inner, rows) {
+  const lines = new Array(rows).fill("");
+  lines[0] = style.dim("keys");
+  const keyWidth = Math.max(...KEYS.map(([key]) => displayWidth(key))) + 1;
+  const cell = ([key, what], width) => truncate(`${style.accent(pad(key, keyWidth))}${what}`, width);
+
+  // Two columns when they fit, otherwise one that scrolls.
+  const columns = inner >= 66 ? 2 : 1;
+  const perColumn = Math.ceil(KEYS.length / columns);
+  const room = rows - 3;
+  const top = columns === 1 ? Math.min(state.overlay.top, Math.max(0, KEYS.length - room)) : 0;
+  state.overlay.top = top;
+  const half = Math.floor(inner / columns);
+  for (let row = 0; row < Math.min(perColumn, room); row += 1) {
+    const left = KEYS[top + row];
+    const right = columns === 2 ? KEYS[perColumn + row] : null;
+    lines[2 + row] = pad(cell(left, half - 1), half) + (right ? cell(right, half - 1) : "");
+  }
+  lines[rows - 1] = style.dim(columns === 1 ? "↑↓ scroll · esc back" : "esc back");
+  return { lines, caret: null };
+}
+
+function onHelpKey(chunk, key) {
+  switch (true) {
+    case key.name === "escape" || (key.ctrl && key.name === "g"):
+      state.overlay = null;
+      break;
+    case key.name === "up":
+      state.overlay.top = Math.max(0, state.overlay.top - 1);
+      break;
+    case key.name === "down":
+      state.overlay.top += 1;
+      break;
+    default:
+      return;
+  }
+  scheduleRender();
 }
 
 /* ---------- follow-up to a running agent ---------- */
@@ -997,6 +1109,9 @@ function onMainKey(chunk, key) {
     case key.ctrl && key.name === "p":
       openPresets();
       break;
+    case key.ctrl && key.name === "g":
+      state.overlay = { type: "help", top: 0 };
+      break;
     case key.ctrl && key.name === "x":
       state.preset = null;
       break;
@@ -1165,6 +1280,7 @@ function isPrintable(chunk, key) {
 
 const OVERLAYS = {
   agents: { body: agentsBody, key: onAgentsKey },
+  help: { body: helpBody, key: onHelpKey },
   dirs: { body: dirsBody, key: onDirsKey },
   model: { body: modelBody, key: onModelKey },
   presets: { body: presetsBody, key: onPresetsKey },
