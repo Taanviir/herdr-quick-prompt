@@ -117,6 +117,7 @@ const state = {
   preset: draft?.preset ?? null,
   followUp: draft?.followUp ?? null, // the running agent Enter sends to, instead of launching
   models: draftModel ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
+  killed: "", // what ctrl+u last cleared, for ctrl+y
   overlay: null, // { type: "agents" | "dirs" | "presets" | "model" | "running", ... } while a picker is open
   notice: handoff ? `From ${process.env.QUICK_PROMPT_SOURCE || "another plugin"} · ⏎ launch · ctrl+r follow up instead`
     : draft?.failed ? `Recovered failed ${draft.followUp ? "follow-up" : "launch"} · edit or Enter to retry · ctrl+u clear`
@@ -950,6 +951,7 @@ function onMainKey(chunk, key) {
       pickChip(Number(key.name) - 1);
       break;
     case key.ctrl && key.name === "u":
+      if (prompt.text) state.killed = prompt.text;
       prompt.clear();
       // The draft notice offers this as the way to be rid of the draft, so it
       // has to actually throw it away rather than just empty the buffer.
@@ -959,8 +961,11 @@ function onMainKey(chunk, key) {
         // What the draft brought along goes with it; a choice made since stays.
         if (state.followUp === draft.followUp) state.followUp = null;
         if (state.preset === draft.preset) state.preset = null;
-        state.notice = "draft discarded";
+        state.notice = "draft discarded · ctrl+y brings it back";
       }
+      break;
+    case key.ctrl && key.name === "y":
+      prompt.insert(state.killed);
       break;
     default:
       if (!editKey(prompt, chunk, key)) return;
