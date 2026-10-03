@@ -54,6 +54,7 @@ description = "Quick Prompt with the focused agent"
 | `ctrl+o` | model and effort (Claude Code and Codex) |
 | `ctrl+p` / `ctrl+x` | pick a preset / remove it |
 | `ctrl+r` | follow up on an agent that is already running |
+| `ctrl+s` | not now: save the prompt to [Scratchpad](https://github.com/Taanviir/herdr-scratchpad) as a note |
 | `ctrl+v` | paste from the system clipboard |
 | `ctrl+u` | clear the prompt |
 | `esc` | close, keeping what you typed |
@@ -87,6 +88,12 @@ remembers its own choice. The model lists live in `lib/models.js`.
 **Follow-ups.** `ctrl+r` lists running agents, the ones waiting on you first.
 Pick one and Enter sends your prompt to it instead of starting a new agent.
 `esc` goes back to launching.
+
+**Saving for later.** With [Scratchpad](https://github.com/Taanviir/herdr-scratchpad)
+installed, `ctrl+s` turns the prompt into a note instead of launching it. The
+note is filed under the directory the prompt would have started in, and
+remembers the agent and branch you were looking at. From Scratchpad, `ctrl+n`
+brings notes back here as a prompt.
 
 **Drafts and history.** Closing with `esc` keeps your prompt, agent,
 destination and directory for next time. A launch that fails comes back the
