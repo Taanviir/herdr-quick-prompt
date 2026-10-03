@@ -1205,6 +1205,19 @@ test("esc out of a recovered follow-up takes its notice along", () => {
   assert.equal(ui.evaluate("state.notice"), null);
 });
 
+test("ctrl+u on a restored draft also drops the follow-up and preset it brought", () => {
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(FAILED_FOLLOW_UP, { runningList: parseAgents({ agents: LISTED }) });
+  ui.evaluate('onMainKey("", { ctrl: true, name: "u" })');
+  assert.equal(ui.evaluate("state.followUp"), null);
+  assert.equal(ui.evaluate("state.preset"), null);
+
+  const chosen = picker(FAILED_FOLLOW_UP, { runningList: parseAgents({ agents: LISTED }) });
+  chosen.evaluate("openRunning(); onRunningKey('\\r', {name: 'return'})");
+  chosen.evaluate('onMainKey("", { ctrl: true, name: "u" })');
+  assert.equal(chosen.evaluate("state.followUp.target"), "w2:p1", "a follow-up picked since is the user's, not the draft's");
+});
+
 test("a recovered follow-up whose agent has gone opens as a launch instead", () => {
   const { parseAgents } = require("../lib/running");
   const draft = { kind: "codex", prompt: "again", failed: true, destination: "follow-up",
