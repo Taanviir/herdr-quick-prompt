@@ -9,6 +9,9 @@ const { finishRequest } = require("../lib/state");
 const { run: herdrRun, notify, HerdrError } = require("../lib/herdr");
 const { createTiming } = require("../lib/timing");
 const { supportsInlinePrompt } = require("../lib/agents");
+const { modelArgs } = require("../lib/models");
+const { composePrompt } = require("../lib/presets");
+const { branchName, uniqueBranch } = require("../lib/worktree");
 
 const START_ATTEMPTS = 12;
 const START_RETRY_MS = 400;
@@ -81,6 +84,19 @@ function createWorkspace({ cwd }) {
   return pane;
 }
 
+// A new branch of the directory's repository, checked out in a workspace of its
+// own. The workspace is labelled with the branch, since every worktree of one
+// repository would otherwise share its name.
+function createWorktree({ cwd, prompt }) {
+  const branch = uniqueBranch(cwd, branchName(prompt));
+  const args = ["worktree", "create", "--cwd", cwd, "--branch", branch, "--label", branch, "--focus"];
+
+  const { result } = run(args);
+  const pane = result.root_pane?.pane_id;
+  if (!pane) throw new HerdrError("herdr did not return a pane for the new worktree");
+  return pane;
+}
+
 function createSplit({ pane, cwd, direction }) {
   if (!pane) throw new HerdrError("no pane to split; open Quick Prompt from a pane");
 
@@ -93,8 +109,8 @@ function createSplit({ pane, cwd, direction }) {
   return created;
 }
 
-// Where the agent lands: its own tab, a split beside the caller, or a whole new
-// workspace.
+// Where the agent lands: its own tab, a split beside the caller, a whole new
+// workspace, or a new worktree.
 function createTarget(request) {
   if (request.destination === "right" || request.destination === "down") {
     return createSplit({ pane: request.pane, cwd: request.cwd, direction: request.destination });
@@ -102,17 +118,21 @@ function createTarget(request) {
   if (request.destination === "workspace") {
     return createWorkspace({ cwd: request.cwd });
   }
+  if (request.destination === "worktree") {
+    return createWorktree({ cwd: request.cwd, prompt: request.prompt });
+  }
   return createTab({ workspace: request.workspace, cwd: request.cwd });
 }
 
 // A freshly created tab may not be at its interactive prompt yet, and
 // `agent start` requires that, so retry briefly before giving up.
 //
-// `inline` is passed through to the agent's own CLI after `--`, which hands the
-// agent its prompt before its TUI even paints.
-function startAgent(name, kind, pane, inline) {
+// `agentArgs` are passed through to the agent's own CLI after `--`. An inline
+// prompt goes last among them, which hands the agent its prompt before its TUI
+// even paints.
+function startAgent(name, kind, pane, agentArgs) {
   const args = ["agent", "start", name, "--kind", kind, "--pane", pane];
-  if (inline) args.push("--", inline);
+  if (agentArgs.length > 0) args.push("--", ...agentArgs);
 
   let last = "agent did not start";
 
@@ -141,8 +161,9 @@ function main() {
 
   const request = readRequest(file);
   timing = createTiming(request);
-  if (request.followUp) return followUp(request.followUp, request.prompt);
-  const { kind, prompt } = request;
+  const prompt = composePrompt(request.preset, request.prompt);
+  if (request.followUp) return followUp(request.followUp, prompt);
+  const { kind } = request;
 
   const name = uniqueName(kind);
   const pane = createTarget(request);
@@ -150,14 +171,15 @@ function main() {
   // Herdr refuses a launch argument with a newline in it, so multiline prompts
   // are typed in instead.
   const inline = prompt && !prompt.includes("\n") && supportsInlinePrompt(kind) ? prompt : null;
+  const options = modelArgs(kind, request);
   let delivered = Boolean(inline);
-  let started = startAgent(name, kind, pane, inline);
+  let started = startAgent(name, kind, pane, inline ? [...options, inline] : options);
 
-  // The agent rejected our launch arguments rather than failing to start; try
-  // again bare and fall back to typing the prompt in.
+  // The agent rejected the inline prompt rather than failing to start; try
+  // again without it and fall back to typing the prompt in.
   if (!started.started && inline) {
     delivered = false;
-    started = startAgent(name, kind, pane, null);
+    started = startAgent(name, kind, pane, options);
   }
   if (!started.started) throw new HerdrError(started.message);
 
