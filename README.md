@@ -72,10 +72,11 @@ used starts selected. `ctrl+k` lists every kind Herdr supports:
 ![The full agent list, with installed agents marked](docs/quick-prompt-agents.png)
 
 **Destination.** `ctrl+t` picks where the agent opens. A new worktree gets a
-branch named after the first line of your prompt ("Fix the login bug" becomes
-`fix-the-login-bug`), or a random name if the prompt is empty. The worktree
-option only appears inside a git repository. If the agent never starts, the
-tab, split or workspace made for it is closed again; a worktree is kept.
+branch named after the first line of your prompt, leaving out any paths ("Fix
+the login bug" becomes `fix-the-login-bug`), or a random name if the prompt is
+empty. The worktree option only appears inside a git repository. If the agent
+never starts, the tab, split or workspace made for it is closed again; a
+worktree is kept.
 
 **Directory.** `ctrl+d` lists the directory you are in, ones you launched into
 before, and neighbouring projects. Type to filter, or type a path starting with
