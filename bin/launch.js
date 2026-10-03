@@ -11,7 +11,7 @@ const { createTiming } = require("../lib/timing");
 const { supportsInlinePrompt } = require("../lib/agents");
 const { modelArgs } = require("../lib/models");
 const { composePrompt } = require("../lib/presets");
-const { branchName, uniqueBranch } = require("../lib/worktree");
+const { branchName, uniqueBranch, worktreeBase } = require("../lib/worktree");
 
 const START_ATTEMPTS = 12;
 const START_RETRY_MS = 400;
@@ -106,9 +106,11 @@ function createWorkspace({ cwd }) {
 // own. The workspace is labelled with the branch, since every worktree of one
 // repository would otherwise share its name. It is never closed again: that
 // would take the checkout with it, and work may already be in there.
-function createWorktree({ cwd, prompt }) {
-  const branch = uniqueBranch(cwd, branchName(prompt));
+function createWorktree({ cwd, prompt, preset }) {
+  const branch = uniqueBranch(cwd, branchName(prompt, preset));
   const args = ["worktree", "create", "--cwd", cwd, "--branch", branch, "--label", branch, "--focus"];
+  const base = worktreeBase(cwd);
+  if (base) args.push("--base", base);
 
   const { result } = run(args);
   const pane = result.root_pane?.pane_id;
@@ -138,7 +140,7 @@ function createTarget(request) {
     return createWorkspace({ cwd: request.cwd });
   }
   if (request.destination === "worktree") {
-    return createWorktree({ cwd: request.cwd, prompt: request.prompt });
+    return createWorktree({ cwd: request.cwd, prompt: request.prompt, preset: request.preset });
   }
   return createTab({ workspace: request.workspace, cwd: request.cwd });
 }

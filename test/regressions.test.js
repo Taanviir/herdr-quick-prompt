@@ -119,7 +119,7 @@ function failedLaunch(destination, startReply, { deliver = () => {} } = {}) {
     "../lib/state": { finishRequest: () => {} },
     "../lib/timing": { createTiming: () => null },
     "../lib/agents": { supportsInlinePrompt: () => false },
-    "../lib/worktree": { branchName: () => "fix-the-login-bug", uniqueBranch: (_, name) => name },
+    "../lib/worktree": { branchName: () => "fix-the-login-bug", uniqueBranch: (_, name) => name, worktreeBase: () => null },
     "../lib/herdr": {
       HerdrError: Error,
       notify: (...args) => notifications.push(args),
@@ -237,7 +237,7 @@ function picker(draft = null, {
       suggestions: () => [],
       ...dirs,
     },
-    "../lib/worktree": { insideRepo: (dir) => dir === "/repo" },
+    "../lib/worktree": { ...require("../lib/worktree"), insideRepo: (dir) => dir === "/repo" },
     "../lib/clipboard": { readClipboard: () => clipboard() },
   }, "/* ---------- boot ---------- */", { ...(running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {}), ...env });
   ui.evaluate("quit = () => {}");
@@ -264,17 +264,21 @@ test("ctrl+t offers a worktree only inside a git repository, and launch refuses 
   assert.equal(requests.length, 0, "nothing was launched");
 });
 
-test("the worktree destination branches from the prompt and starts the agent in its pane", () => {
+// A worktree launch of `request` in a repository whose origin/HEAD is
+// `originHead`, and where fix-the-login-bug is already taken.
+function worktreeLaunch(request, { originHead = null, env = {} } = {}) {
   const calls = [];
   const worktree = load("lib/worktree.js", {
     "node:child_process": {
-      // fix-the-login-bug already exists, so the launch takes the next name.
-      spawnSync: (_, args) => ({ status: args.at(-1) === "refs/heads/fix-the-login-bug" ? 0 : 1, stdout: "" }),
+      spawnSync: (_, args) => {
+        if (args.includes("symbolic-ref")) return { status: originHead ? 0 : 1, stdout: originHead ? `${originHead}\n` : "" };
+        return { status: args.at(-1) === "refs/heads/fix-the-login-bug" ? 0 : 1, stdout: "" };
+      },
     },
-  }).context.module.exports;
+  }, null, env).context.module.exports;
   const launcher = load("bin/launch.js", {
     "../lib/worktree": worktree,
-    "node:fs": { readFileSync: () => JSON.stringify({ kind: "claude", prompt: "Fix the login bug", destination: "worktree", cwd: "/repo" }) },
+    "node:fs": { readFileSync: () => JSON.stringify({ kind: "claude", destination: "worktree", cwd: "/repo", ...request }) },
     "../lib/timing": { createTiming: () => null },
     "../lib/agents": { supportsInlinePrompt: () => true },
     "../lib/herdr": {
@@ -286,11 +290,44 @@ test("the worktree destination branches from the prompt and starts the agent in 
     },
   }, "try {\n  main();");
   launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  launcher.evaluate("waitInteractive = () => true; deliverPrompt = () => {}");
   assert.doesNotThrow(() => launcher.evaluate("main()"));
+  return calls;
+}
+
+test("the worktree destination branches from the prompt and starts the agent in its pane", () => {
+  const calls = worktreeLaunch({ prompt: "Fix the login bug" });
   const created = calls.find((args) => args[0] === "worktree");
   assert.equal(created.join(" "), "worktree create --cwd /repo --branch fix-the-login-bug-2 --label fix-the-login-bug-2 --focus");
   const started = calls.find((args) => args[1] === "start");
   assert.equal(started[started.indexOf("--pane") + 1], "w2:p1");
+});
+
+test("a worktree branches from origin/HEAD, or QUICK_PROMPT_WORKTREE_BASE when set", () => {
+  const base = (calls) => {
+    const created = calls.find((args) => args[0] === "worktree");
+    return created.includes("--base") ? created[created.indexOf("--base") + 1] : null;
+  };
+  assert.equal(base(worktreeLaunch({ prompt: "x" }, { originHead: "origin/main" })), "origin/main");
+  assert.equal(base(worktreeLaunch({ prompt: "x" })), null, "no remote default leaves Herdr branching from HEAD");
+  assert.equal(base(worktreeLaunch({ prompt: "x" }, { originHead: "origin/main", env: { QUICK_PROMPT_WORKTREE_BASE: "release" } })), "release");
+});
+
+test("an empty prompt with a preset names the worktree branch after the preset", () => {
+  const calls = worktreeLaunch({ prompt: "", preset: { name: "Fix tests", prefix: "Run the tests.", postfix: "", task: "skip" } });
+  const created = calls.find((args) => args[0] === "worktree");
+  assert.equal(created[created.indexOf("--branch") + 1], "fix-tests");
+});
+
+test("the destination row shows the branch a worktree will get", () => {
+  const ui = picker();
+  const row = () => ui.evaluate("destinationRow(71)").replace(/\x1b\[[0-9;]*m/g, "");
+  ui.evaluate("state.cwd = '/repo'; state.destination = DESTINATIONS.findIndex((d) => d.id === 'worktree')");
+  assert.match(row(), /new worktree · random branch \(ctrl\+t\)/);
+  ui.evaluate("state.prompt = new Editor('Fix the login bug')");
+  assert.match(row(), /new worktree · fix-the-login-bug \(ctrl\+t\)/);
+  ui.evaluate("state.prompt = new Editor(''); state.preset = { name: 'nightly', prefix: 'x', postfix: '', task: 'skip' }");
+  assert.match(row(), /new worktree · nightly/);
 });
 
 test("an agent outside the first five remains selected and visible", () => {
