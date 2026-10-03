@@ -1708,6 +1708,15 @@ test("a follow-up goes to the chosen agent, and esc backs out one step at a time
   assert.equal(ui.evaluate("state.followUp"), null, "esc leaves follow-up mode before it closes the picker");
 });
 
+test("in a narrow running list the title keeps its room and the path goes", () => {
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(null, { runningList: parseAgents({ agents: LISTED }) });
+  ui.evaluate("openRunning()");
+  const plain = (width) => ui.evaluate(`runningBody(${width}, 8)`).lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.match(plain(40)[3], /Refactor auth +claude · working $/);
+  assert.match(plain(71)[3], /Refactor auth +claude · working · \/work\/api $/);
+});
+
 test("a blocked agent is marked in the running list and cannot be chosen", () => {
   const { parseAgents } = require("../lib/running");
   const ui = picker(null, { runningList: parseAgents({ agents: LISTED }) });
