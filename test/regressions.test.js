@@ -110,6 +110,60 @@ test("a prompt starting with a dash is typed in rather than handed to the CLI as
   assert.ok(calls.some((args) => args[1] === "prompt" && args[3] === "--help me with the build"));
 });
 
+// A launch to `destination` whose agent start gets `startReply`.
+function failedLaunch(destination, startReply, { deliver = () => {} } = {}) {
+  const calls = [];
+  const notifications = [];
+  const launcher = load("bin/launch.js", {
+    "node:fs": { readFileSync: () => JSON.stringify({ kind: "gemini", prompt: "Fix the login bug", destination, cwd: "/repo", pane: "w1:p1" }) },
+    "../lib/state": { finishRequest: () => {} },
+    "../lib/timing": { createTiming: () => null },
+    "../lib/agents": { supportsInlinePrompt: () => false },
+    "../lib/worktree": { branchName: () => "fix-the-login-bug", uniqueBranch: (_, name) => name },
+    "../lib/herdr": {
+      HerdrError: Error,
+      notify: (...args) => notifications.push(args),
+      run: (args) => {
+        calls.push(args);
+        if (args[0] === "tab") return { ok: true, result: { tab: { tab_id: "w1:t7" }, root_pane: { pane_id: "w1:p8" } } };
+        if (args[0] === "workspace") return { ok: true, result: { workspace: { workspace_id: "w5" }, tab: { tab_id: "w5:t1" }, root_pane: { pane_id: "w5:p1" } } };
+        if (args[0] === "worktree") return { ok: true, result: { workspace: { workspace_id: "w6" }, root_pane: { pane_id: "w6:p1" } } };
+        if (args[0] === "pane" && args[1] === "split") return { ok: true, result: { pane: { pane_id: "w1:p9" } } };
+        if (args[1] === "start") return startReply;
+        return { ok: true, result: {} };
+      },
+    },
+  }, "try {\n  main();");
+  launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  launcher.context.process.exit = () => {};
+  launcher.evaluate("sleep = () => {}; waitInteractive = () => true");
+  launcher.context.deliverPrompt = deliver;
+  const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
+  launcher.evaluate(source.slice(source.indexOf("try {\n  main();")));
+  return { closed: calls.filter((args) => args[1] === "close").map((args) => args.join(" ")), notifications };
+}
+
+test("a launch whose agent never starts closes the tab, split or workspace it made", () => {
+  const refused = { ok: false, code: "agent_exited", message: "gemini exited" };
+  assert.deepEqual(failedLaunch("tab", refused).closed, ["tab close w1:t7"]);
+  assert.deepEqual(failedLaunch("right", refused).closed, ["pane close w1:p9"]);
+  assert.deepEqual(failedLaunch("workspace", refused).closed, ["workspace close w5"]);
+});
+
+test("a failed worktree launch keeps the worktree and names its branch", () => {
+  const { closed, notifications } = failedLaunch("worktree", { ok: false, code: "agent_exited", message: "gemini exited" });
+  assert.deepEqual(closed, []);
+  assert.match(notifications[0][1], /gemini exited \(branch fix-the-login-bug is kept\)/);
+});
+
+test("an agent that started is left running when its prompt does not land", () => {
+  const { closed, notifications } = failedLaunch("tab", { ok: true, result: {} }, {
+    deliver: () => { throw new Error("gemini did not accept the prompt"); },
+  });
+  assert.deepEqual(closed, [], "the user may be looking at it");
+  assert.match(notifications[0][1], /did not accept the prompt/);
+});
+
 test("a failed launch records why in startup.jsonl, without the prompt or the agent's title", () => {
   const records = [];
   const followUp = load("bin/launch.js", {

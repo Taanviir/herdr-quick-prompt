@@ -29,6 +29,9 @@ const SETTLE_MS = 900;
 const DELIVERY_ATTEMPTS = 3;
 const FOLLOW_UP_TIMEOUT_MS = 20000;
 let timing;
+// What this launch created, and whether an agent ever started in it.
+let opened = null;
+let agentStarted = false;
 
 function run(args, options) {
   return timing
@@ -81,7 +84,7 @@ function createTab({ workspace, cwd }) {
   const { result } = run(args);
   const pane = result.root_pane?.pane_id;
   if (!pane) throw new HerdrError("herdr did not return a pane for the new tab");
-  return pane;
+  return { pane, close: ["tab", "close", result.tab?.tab_id] };
 }
 
 // Herdr labels a workspace from its directory, which is what you want here.
@@ -92,12 +95,13 @@ function createWorkspace({ cwd }) {
   const { result } = run(args);
   const pane = result.root_pane?.pane_id;
   if (!pane) throw new HerdrError("herdr did not return a pane for the new workspace");
-  return pane;
+  return { pane, close: ["workspace", "close", result.workspace?.workspace_id] };
 }
 
 // A new branch of the directory's repository, checked out in a workspace of its
 // own. The workspace is labelled with the branch, since every worktree of one
-// repository would otherwise share its name.
+// repository would otherwise share its name. It is never closed again: that
+// would take the checkout with it, and work may already be in there.
 function createWorktree({ cwd, prompt }) {
   const branch = uniqueBranch(cwd, branchName(prompt));
   const args = ["worktree", "create", "--cwd", cwd, "--branch", branch, "--label", branch, "--focus"];
@@ -105,7 +109,7 @@ function createWorktree({ cwd, prompt }) {
   const { result } = run(args);
   const pane = result.root_pane?.pane_id;
   if (!pane) throw new HerdrError("herdr did not return a pane for the new worktree");
-  return pane;
+  return { pane, branch };
 }
 
 function createSplit({ pane, cwd, direction }) {
@@ -117,7 +121,7 @@ function createSplit({ pane, cwd, direction }) {
   const { result } = run(args);
   const created = result.pane?.pane_id;
   if (!created) throw new HerdrError("herdr did not return a pane for the split");
-  return created;
+  return { pane: created, close: ["pane", "close", created] };
 }
 
 // Where the agent lands: its own tab, a split beside the caller, a whole new
@@ -180,7 +184,8 @@ function main() {
   const name = uniqueName(kind);
   // From here on the agent is addressed by its pane. Herdr accepts either, and
   // an `agent start` that times out may never have registered the name.
-  const pane = createTarget(request);
+  opened = createTarget(request);
+  const { pane } = opened;
 
   // Herdr refuses a launch argument with a newline in it, and the agent's CLI
   // would read one starting with a dash as an option, so those are typed in.
@@ -200,6 +205,7 @@ function main() {
     started = startAgent(name, kind, pane, options, START_TIMEOUT_MS);
   }
   if (!started.started) throw new HerdrError(started.message);
+  agentStarted = true;
 
   // Delivered at launch: nothing left to type.
   if (delivered || !prompt) return;
@@ -214,6 +220,16 @@ function main() {
 
   if (!waitInteractive(pane)) throw failure(`${kind} never became ready`);
   deliverPrompt(pane, kind, prompt);
+}
+
+// An agent that never started leaves an empty shell behind, so that goes. One
+// that did start stays: it may be waiting on a dialog the user is answering.
+// Returns what to add to the notification.
+function cleanUp() {
+  if (!opened || agentStarted) return "";
+  if (opened.branch) return ` (branch ${opened.branch} is kept)`;
+  if (opened.close.at(-1)) run(opened.close, { check: false });
+  return "";
 }
 
 // The agent is past its startup repaint, so the keystrokes are not at risk the
@@ -277,8 +293,9 @@ try {
   finishRequest(process.argv[2], true);
 } catch (error) {
   const message = error.message ?? String(error);
+  const kept = cleanUp();
   timing?.finish(false, error.logged ?? message);
   finishRequest(process.argv[2], false);
-  notify("Quick Prompt failed", `${message} — reopen Quick Prompt to recover your draft.`);
+  notify("Quick Prompt failed", `${message}${kept} — reopen Quick Prompt to recover your draft.`);
   process.exit(1);
 }
