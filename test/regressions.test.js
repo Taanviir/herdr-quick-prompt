@@ -419,3 +419,36 @@ test("kitty protocol keys come back as the legacy bytes readline knows", () => {
   assert.equal(legacyKeys("\x1b[9;2u"), "\x1b[Z");
   assert.equal(legacyKeys("a\x1b[1;5Db"), "a\x1b[1;5Db");
 });
+
+test("the agent in a pane is matched by pane id and reports its foreground directory", () => {
+  const { agentInPane } = require("../lib/agents");
+  const list = [
+    { agent: "claude", pane_id: "w1:p1", cwd: "/repo", foreground_cwd: "/repo/worktree", focused: true },
+    { agent: "codex", pane_id: "w1:p2", cwd: "/other" },
+    { pane_id: "w1:p3", cwd: "/no-agent" },
+  ];
+  assert.deepEqual(agentInPane(list, "w1:p1"), { kind: "claude", cwd: "/repo/worktree" });
+  assert.deepEqual(agentInPane(list, "w1:p2"), { kind: "codex", cwd: "/other" }, "falls back to the pane's cwd");
+  assert.equal(agentInPane(list, "w1:p3"), null, "a pane without an agent kind is no match");
+  assert.equal(agentInPane(list, "w9:p9"), null, "focus elsewhere is not a match");
+  assert.equal(agentInPane(list, undefined), null);
+  assert.equal(agentInPane(undefined, "w1:p1"), null);
+});
+
+test("looking up the running agent is bounded and gives up quietly", () => {
+  const calls = [];
+  const lookup = (reply) => load("lib/agents.js", {
+    "./herdr": { BIN: "herdr", run: (args, options) => { calls.push({ args, options }); return reply; } },
+  }).context.module.exports.runningAgent;
+
+  const found = lookup({ ok: true, result: { agents: [{ agent: "pi", pane_id: "w1:p2", foreground_cwd: "/src" }] } });
+  assert.deepEqual({ ...found("w1:p2") }, { kind: "pi", cwd: "/src" });
+  assert.deepEqual([...calls[0].args], ["agent", "list"]);
+  assert.ok(calls[0].options.timeout > 0, "a hung Herdr must not hold the popup open");
+
+  assert.equal(lookup({ ok: false, message: "spawnSync herdr ETIMEDOUT" })("w1:p2"), null);
+  assert.equal(lookup({ ok: true, result: {} })("w1:p2"), null);
+  calls.length = 0;
+  assert.equal(lookup({ ok: true, result: {} })(undefined), null);
+  assert.equal(calls.length, 0, "no origin pane means nothing to ask");
+});
