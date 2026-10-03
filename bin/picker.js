@@ -524,13 +524,16 @@ function openPresets() {
 }
 
 // Choosing the preset already applied takes it off again. A skip preset over an
-// empty prompt has nothing left to ask for, so it launches straight away.
+// empty prompt has nothing left to ask for, so it launches straight away. In a
+// follow-up only the text applies: the agent is already chosen, and sending
+// stays a deliberate Enter.
 function applyPreset(preset) {
   if (state.preset?.name === preset.name) {
     state.preset = null;
     return;
   }
   state.preset = preset;
+  if (state.followUp) return;
   if (preset.agent) {
     const index = agents.findIndex((item) => item.kind === preset.agent);
     if (index < 0) {

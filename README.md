@@ -137,9 +137,9 @@ plugin's config directory (`herdr plugin config-dir taanviir.quick-prompt`):
 | Field | |
 | --- | --- |
 | `name` | required, unique |
-| `agent` | optional agent kind, as listed under `ctrl+k` |
+| `agent` | optional agent kind, as listed under `ctrl+k`; ignored in a follow-up |
 | `prefix`, `postfix` | text sent before and after your prompt |
-| `task` | `skip` launches straight away when the prompt is empty |
+| `task` | `skip` launches straight away when the prompt is empty, except in a follow-up |
 
 A preset with a mistake in it is left out, and the list says why.
 
