@@ -61,7 +61,8 @@ directory the user invoked from travels as `QUICK_PROMPT_CWD` instead.
 
 **A popup's output goes nowhere.** Pane commands do not appear in
 `herdr plugin log list`, so a crash is just a window that blinks once. Uncaught
-errors are appended to `crash.log` in the state directory — check there first.
+errors, and bugs in the detached launcher, are appended to `crash.log` in the
+state directory — check there first.
 
 **A lone ESC byte is the Escape key.** Readline cannot tell `esc` from the start
 of an arrow key, so it waits 500ms before deciding — which is a very long time to

@@ -5,7 +5,7 @@
 // A follow-up skips all of that and prompts an agent that is already running.
 
 const fs = require("node:fs");
-const { finishRequest } = require("../lib/state");
+const { finishRequest, logCrash } = require("../lib/state");
 const { run: herdrRun, notify, HerdrError } = require("../lib/herdr");
 const { createTiming } = require("../lib/timing");
 const { supportsInlinePrompt } = require("../lib/agents");
@@ -292,6 +292,9 @@ try {
   timing?.finish(true);
   finishRequest(process.argv[2], true);
 } catch (error) {
+  // A HerdrError is Herdr saying no, and startup.jsonl has it. Anything else
+  // is a bug here.
+  if (!(error instanceof HerdrError)) logCrash(error);
   const message = error.message ?? String(error);
   const kept = cleanUp();
   timing?.finish(false, error.logged ?? message);
