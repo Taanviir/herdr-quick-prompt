@@ -906,6 +906,9 @@ function onMainKey(chunk, key) {
       if (draftFile) {
         clearDraft(draftFile);
         draftFile = null;
+        // What the draft brought along goes with it; a choice made since stays.
+        if (state.followUp === draft.followUp) state.followUp = null;
+        if (state.preset === draft.preset) state.preset = null;
         state.notice = "draft discarded";
       }
       break;
