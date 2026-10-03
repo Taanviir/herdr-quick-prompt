@@ -55,6 +55,25 @@ You can also open it without a key:
 herdr plugin action invoke taanviir.quick-prompt.open
 ```
 
+### Duplicate the focused agent
+
+A second action, `duplicate`, opens the same popup set up to run another copy
+of whatever agent is in the pane you are on: that agent starts selected, and
+the directory is the one it is working in now. If it moved into a worktree, you
+get the worktree, not the directory its pane opened in. On a pane with no agent it opens exactly like
+`open`. The setup action only binds `open`, so add this one by hand:
+
+```toml
+[[keys.command]]
+key = "prefix+shift+a"
+type = "plugin_action"
+command = "taanviir.quick-prompt.duplicate"
+description = "Quick Prompt with the focused agent"
+```
+
+It is a separate action rather than the default so that `open` always starts
+from the agent you used last, wherever you press it.
+
 ## Using it
 
 Everything is on one screen, and the cursor starts in the prompt — just type and

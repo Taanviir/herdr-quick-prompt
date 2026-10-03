@@ -12,7 +12,7 @@ const fs = require("node:fs");
 const { PassThrough } = require("node:stream");
 const { StringDecoder } = require("node:string_decoder");
 
-const { catalog } = require("../lib/agents");
+const { catalog, runningAgent } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
 const { spawnDetached, notify } = require("../lib/herdr");
 const { STATE_DIR, readPrefs, remember, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft } = require("../lib/state");
@@ -54,6 +54,9 @@ sweepStaleRequests();
 const draft = readDraft();
 // Cleared once the draft has been thrown away, so the notice says so only once.
 let restored = Boolean(draft);
+// The duplicate action starts from the agent in the pane you came from, which
+// is a deliberate ask, so it outranks both a restored draft and recency.
+const duplicate = process.env.QUICK_PROMPT_DUPLICATE ? runningAgent(originPane) : null;
 const out = process.stdout;
 
 // A paste is a burst of keypresses: inside it a newline is content, not "launch",
@@ -68,12 +71,21 @@ let swallow = false;
 // Escapes already acted on, waiting for readline to emit them late.
 let pendingEscapes = 0;
 
+// The first of these that is a kind Herdr knows starts selected.
+function initialAgent(...wanted) {
+  for (const kind of wanted) {
+    const at = agents.findIndex((a) => a.kind === kind);
+    if (at >= 0) return at;
+  }
+  return 0;
+}
+
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
-  agent: Math.max(0, agents.findIndex((a) => a.kind === (draft?.kind ?? prefs.recents[0]))),
+  agent: initialAgent(duplicate?.kind, draft?.kind, prefs.recents[0]),
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draft?.destination ?? prefs.destination))),
   prompt: new Editor(draft?.prompt ?? ""),
-  cwd: draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
+  cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   overlay: null, // { type: "agents" | "dirs", ... } while a picker is open
   notice: draft?.failed ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear"
     : draft ? "Restored draft · ctrl+u clear" : null,
