@@ -61,7 +61,7 @@ test("an agent busy with its inline prompt counts as started after readiness tim
 });
 
 function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
-  running = null, recents = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
+  running = null, recents = [], history = [], stateDir = path.join(require("node:os").tmpdir(), "qp-unused"),
 } = {}) {
   return load("bin/picker.js", {
     "../lib/agents": {
@@ -72,6 +72,8 @@ function picker(draft = null, drafts = { saved: [], cleared: 0 }, {
     "../lib/state": {
       STATE_DIR: stateDir,
       readPrefs: () => ({ recents, directories: [] }),
+      readHistory: () => history,
+      recordPrompt: () => {},
       readDraft: () => draft,
       saveDraft: (saved) => drafts.saved.push(saved),
       clearDraft: () => { drafts.cleared += 1; return null; },
@@ -384,6 +386,92 @@ test("requests abandoned by a killed worker are swept, live ones are not", (t) =
   assert.equal(fs.existsSync(orphan), false, "a request older than any live launch is abandoned");
   assert.equal(fs.existsSync(live), true, "a request that could still be in flight is left alone");
   assert.equal(fs.existsSync(draft), true, "recoverable drafts are not requests and are not swept");
+});
+
+test("prompt history keeps the last fifty launches, newest first and without repeats", (t) => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-history-test-"));
+  t.after(() => {
+    for (const name of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, name));
+    fs.rmdirSync(dir);
+  });
+
+  const state = load("lib/state.js", {}, "const STATE_DIR =");
+  state.context.process.env.HERDR_PLUGIN_STATE_DIR = dir;
+  const source = fs.readFileSync(path.resolve(__dirname, "../lib/state.js"), "utf8");
+  vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
+  const api = state.context.module.exports;
+
+  assert.deepEqual([...api.readHistory()], []);
+  api.recordPrompt("first");
+  api.recordPrompt("  second\n");
+  api.recordPrompt("   ");
+  api.recordPrompt("");
+  assert.deepEqual([...api.readHistory()], ["second", "first"], "trimmed, and blank launches are not kept");
+
+  api.recordPrompt("first");
+  assert.deepEqual([...api.readHistory()], ["first", "second"], "a repeat moves to the front instead of appearing twice");
+
+  for (let n = 0; n < 60; n += 1) api.recordPrompt(`prompt ${n}`);
+  const history = api.readHistory();
+  assert.equal(history.length, 50);
+  assert.equal(history[0], "prompt 59");
+  assert.equal(history[49], "prompt 10");
+
+  fs.writeFileSync(path.join(dir, "history.json"), "{ not json");
+  assert.deepEqual([...api.readHistory()], [], "a damaged history must not prevent opening the picker");
+});
+
+test("history walks back to the oldest entry and forward to the draft it set aside", () => {
+  const { History } = require("../lib/history");
+  const history = new History(["newest", "older"]);
+  assert.equal(history.newer(), null, "nothing is newer than the draft");
+  assert.equal(history.older("draft"), "newest");
+  assert.equal(history.older("newest"), "older");
+  assert.equal(history.older("older"), null, "the oldest entry is the end");
+  assert.equal(history.newer(), "newest");
+  assert.equal(history.newer(), "draft");
+  assert.equal(history.newer(), null);
+  assert.equal(new History([]).older("draft"), null);
+});
+
+test("up and down recall history only past the top and bottom of the prompt", () => {
+  const ui = picker(null, undefined, { history: ["second\nline", "first"] });
+  const press = (name) => ui.evaluate(`onMainKey(undefined, {name: '${name}'}); state.prompt.text`);
+
+  ui.evaluate("state.prompt = new Editor('draft')");
+  assert.equal(press("up"), "second\nline");
+  assert.equal(press("up"), "second\nline", "a recalled multi-line prompt is walked line by line first");
+  assert.equal(ui.evaluate("state.prompt.cursor"), 4);
+  assert.equal(press("up"), "first");
+  assert.equal(press("up"), "first");
+  assert.equal(press("down"), "second\nline");
+  assert.equal(press("down"), "draft", "walking past the newest entry gives back what was being typed");
+  assert.equal(press("down"), "draft");
+
+  ui.evaluate("state.prompt = new Editor('one\\ntwo')");
+  assert.equal(press("up"), "one\ntwo", "up inside a multi-line draft still moves between its lines");
+  assert.equal(ui.evaluate("state.prompt.cursor"), 3);
+});
+
+test("launching records the prompt in history", () => {
+  const recorded = [];
+  const ui = load("bin/picker.js", {
+    "../lib/agents": { catalog: () => [{ kind: "claude", installed: true }] },
+    "../lib/state": {
+      STATE_DIR: path.join(require("node:os").tmpdir(), "qp-unused"),
+      readPrefs: () => ({ recents: [], directories: [] }),
+      readHistory: () => [],
+      recordPrompt: (prompt) => recorded.push(prompt),
+      remember: () => {},
+      writeRequest: () => "/tmp/request.json",
+      readDraft: () => null,
+      clearDraft: () => null,
+      sweepStaleRequests: () => {},
+    },
+    "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
+  }, "/* ---------- boot ---------- */");
+  ui.evaluate("quit = () => {}; state.prompt = new Editor('fix the bug'); launch()");
+  assert.deepEqual(recorded, ["fix the bug"]);
 });
 
 test("word motion and deletion stop at whitespace from either side", () => {
