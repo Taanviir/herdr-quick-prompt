@@ -21,6 +21,7 @@ const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
 const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
+const { PRESETS, readPresets, composePrompt } = require("../lib/presets");
 
 const LAUNCHER = path.join(__dirname, "launch.js");
 
@@ -50,6 +51,7 @@ const originPane = process.env.QUICK_PROMPT_PANE ?? ctx.focused_pane_id ?? proce
 
 const prefs = readPrefs();
 const agents = catalog();
+const { presets, problems: presetProblems } = readPresets();
 sweepStaleRequests();
 const recovered = readFailedRequest();
 // Cleared once the draft has been taken up or thrown away, so neither happens twice.
@@ -74,7 +76,8 @@ const state = {
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (recovered?.request.destination ?? prefs.destination))),
   prompt: new Editor(recovered?.request.prompt ?? ""),
   cwd: recovered?.request.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
-  overlay: null, // { type: "agents" | "dirs", ... } while a picker is open
+  preset: recovered?.request.preset ?? null,
+  overlay: null, // { type: "agents" | "dirs" | "presets", ... } while a picker is open
   notice: recovered ? "Recovered failed launch · edit or Enter to retry · ctrl+u clear" : null,
 };
 
@@ -114,9 +117,8 @@ function scheduleRender() {
 function render() {
   const inner = content();
   const rows = height();
-  const body = state.overlay
-    ? (state.overlay.type === "dirs" ? dirsBody(inner, rows) : agentsBody(inner, rows))
-    : mainBody(inner, rows);
+  const overlays = { agents: agentsBody, dirs: dirsBody, presets: presetsBody };
+  const body = state.overlay ? overlays[state.overlay.type](inner, rows) : mainBody(inner, rows);
 
   const painted = [];
   for (let row = 0; row < rows; row += 1) {
@@ -135,6 +137,7 @@ function render() {
 function mainBody(inner, rows) {
   const lines = new Array(rows).fill("");
   lines[1] = chipRow(inner);
+  if (state.preset) lines[2] = presetRow();
 
   const caret = promptBlock(lines, 3, Math.max(1, rows - 6), inner);
 
@@ -209,8 +212,12 @@ function destinationRow(inner) {
   return `${style.dim("→")} ${what} ${style.dim("·")} ${where} ${style.dim("(ctrl+d)")}`;
 }
 
+function presetRow() {
+  return `${style.dim("preset")} ${style.accent(state.preset.name)}  ${style.dim("ctrl+p change · ctrl+x clear")}`;
+}
+
 function hints() {
-  const verb = state.prompt.isEmpty ? "⏎ open agent" : "⏎ launch";
+  const verb = composePrompt(state.preset, state.prompt.text) ? "⏎ launch" : "⏎ open agent";
   return `${verb} · tab agent · ctrl+v paste · \\⏎ newline · esc cancel`;
 }
 
@@ -248,6 +255,119 @@ function agentsBody(inner, rows) {
 
   lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ choose · esc back");
   return { lines, caret: null };
+}
+
+/* ---------- presets ---------- */
+
+function presetMatches() {
+  const needle = state.overlay.filter.toLowerCase();
+  return presets.filter((item) => item.name.toLowerCase().includes(needle));
+}
+
+function presetsBody(inner, rows) {
+  const lines = new Array(rows).fill("");
+  const list = presetMatches();
+
+  lines[0] = state.overlay.filter
+    ? `${style.dim("preset")}  ${style.accent(state.overlay.filter)}${style.dim("▏")}`
+    : style.dim("preset");
+
+  // A broken entry is skipped, so say which one rather than let it vanish.
+  let footer = rows - 1;
+  if (presetProblems.length) {
+    const more = presetProblems.length > 1 ? ` (+${presetProblems.length - 1} more)` : "";
+    lines[rows - 2] = style.warn(`${presetProblems[0]}${more}`);
+    footer = rows - 2;
+  }
+
+  if (presets.length === 0) {
+    lines[1] = style.dim("no presets yet; add them to");
+    lines[2] = shortenPath(PRESETS, inner);
+    lines[rows - 1] = style.dim("esc back");
+    return { lines, caret: null };
+  }
+  if (list.length === 0) {
+    lines[1] = style.warn("no preset matches that filter");
+    lines[rows - 1] = style.dim("esc back");
+    return { lines, caret: null };
+  }
+
+  const room = footer - 1;
+  const active = Math.min(state.overlay.index, list.length - 1);
+  const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
+  const detailWidth = 18;
+  const nameWidth = Math.max(10, inner - detailWidth - 5);
+
+  list.slice(start, start + room).forEach((item, index) => {
+    const at = start + index;
+    const name = pad(truncate(item.name, nameWidth), nameWidth);
+    const detail = style.dim(pad(truncate([item.agent, item.task === "skip" ? "skip" : null]
+      .filter(Boolean).join(" · "), detailWidth), detailWidth));
+    const mark = item.name === state.preset?.name ? style.ok("●") : " ";
+    lines[1 + index] = at === active
+      ? `${style.selected(` ${name}`)} ${detail} ${mark}`
+      : ` ${name} ${detail} ${mark}`;
+  });
+
+  lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ apply, again to remove · esc back");
+  return { lines, caret: null };
+}
+
+function openPresets() {
+  const index = presets.findIndex((item) => item.name === state.preset?.name);
+  state.overlay = { type: "presets", filter: "", index: Math.max(0, index) };
+}
+
+// Choosing the preset already applied takes it off again. A skip preset over an
+// empty prompt has nothing left to ask for, so it launches straight away.
+function applyPreset(preset) {
+  if (state.preset?.name === preset.name) {
+    state.preset = null;
+    return;
+  }
+  state.preset = preset;
+  if (preset.agent) {
+    const index = agents.findIndex((item) => item.kind === preset.agent);
+    if (index < 0) {
+      state.notice = `preset ${preset.name}: herdr has no agent kind "${preset.agent}"`;
+      return;
+    }
+    state.agent = index;
+  }
+  if (preset.task === "skip" && state.prompt.isEmpty) launch();
+}
+
+function onPresetsKey(chunk, key) {
+  const list = presetMatches();
+
+  switch (true) {
+    case key.name === "escape":
+      state.overlay = null;
+      break;
+    case key.name === "up" || (key.ctrl && key.name === "p"):
+      state.overlay.index = Math.max(0, Math.min(state.overlay.index, list.length - 1) - 1);
+      break;
+    case key.name === "down" || (key.ctrl && key.name === "n"):
+      state.overlay.index = Math.min(list.length - 1, state.overlay.index + 1);
+      break;
+    case key.name === "return" || key.name === "enter": {
+      const chosen = list[Math.min(state.overlay.index, list.length - 1)];
+      state.overlay = null;
+      if (chosen) applyPreset(chosen);
+      break;
+    }
+    case key.name === "backspace":
+      state.overlay.filter = state.overlay.filter.slice(0, -1);
+      state.overlay.index = 0;
+      break;
+    case isPrintable(chunk, key):
+      state.overlay.filter += chunk.toLowerCase();
+      state.overlay.index = 0;
+      break;
+    default:
+      return;
+  }
+  scheduleRender();
 }
 
 /* ---------- the working directory ---------- */
@@ -391,7 +511,8 @@ function onKey(chunk, key = {}) {
     return scheduleRender();
   }
   if (state.overlay) {
-    return state.overlay.type === "dirs" ? onDirsKey(chunk, key) : onAgentsKey(chunk, key);
+    const handlers = { agents: onAgentsKey, dirs: onDirsKey, presets: onPresetsKey };
+    return handlers[state.overlay.type](chunk, key);
   }
   return onMainKey(chunk, key);
 }
@@ -511,6 +632,12 @@ function onMainKey(chunk, key) {
       break;
     case key.ctrl && key.name === "d":
       openDirectories();
+      break;
+    case key.ctrl && key.name === "p":
+      openPresets();
+      break;
+    case key.ctrl && key.name === "x":
+      state.preset = null;
       break;
     case key.ctrl && key.name === "t":
       state.destination = (state.destination + 1) % DESTINATIONS.length;
@@ -644,6 +771,7 @@ function launch() {
     submittedAt: Date.now(),
     kind: chosen.kind,
     prompt: state.prompt.text.trim(),
+    preset: state.preset,
     destination: destination().id,
     cwd: state.cwd,
     workspace,
