@@ -55,6 +55,25 @@ You can also open it without a key:
 herdr plugin action invoke taanviir.quick-prompt.open
 ```
 
+### Duplicate the focused agent
+
+A second action, `duplicate`, opens the same popup set up to run another copy
+of whatever agent is in the pane you are on: that agent starts selected, and
+the directory is the one it is working in now. If it moved into a worktree, you
+get the worktree, not the directory its pane opened in. On a pane with no agent it opens exactly like
+`open`. The setup action only binds `open`, so add this one by hand:
+
+```toml
+[[keys.command]]
+key = "prefix+shift+a"
+type = "plugin_action"
+command = "taanviir.quick-prompt.duplicate"
+description = "Quick Prompt with the focused agent"
+```
+
+It is a separate action rather than the default so that `open` always starts
+from the agent you used last, wherever you press it.
+
 ## Using it
 
 Everything is on one screen, and the cursor starts in the prompt — just type and
@@ -70,7 +89,7 @@ press `enter`.
 | `ctrl+k` | the full agent list, filterable by typing |
 | `ctrl+t` | destination: new tab → split right → split down → new workspace |
 | `ctrl+d` | working directory: recent and neighbouring projects, or type a path |
-| `esc` | cancel |
+| `esc` | close, keeping what you typed |
 
 Editing keys work as you would expect, in the prompt and the directory field:
 
@@ -89,11 +108,13 @@ wherever the terminal maps it to Home/End or `ctrl+a`/`ctrl+e`.
 Up/down moves between displayed prompt lines, including wrapped lines. Long
 directory paths scroll horizontally to keep the cursor visible.
 
-If a launch fails, reopen Quick Prompt to recover the prompt, agent, directory,
-and destination. Edit it and press Enter to retry, or use `ctrl+u` to clear the
-text. Retrying uses the workspace and pane you open the picker from. Failed
-drafts stay in the plugin state directory until replaced by a retry; successful
-launch requests are removed.
+Closing with `esc` keeps what you typed. The next time you open Quick Prompt it
+starts on that draft, with the prompt, agent, directory, and destination as you
+left them and the cursor at the end. A launch that fails comes back the same way, so you can edit
+it and press Enter to retry. Either way, `ctrl+u` throws the draft away, and so
+does closing an empty box. Retrying uses the workspace and pane you open the
+picker from. There is only ever one draft, in the plugin state directory: a
+launch clears it, and one more than a day old is dropped.
 
 The numbered chips are the agents you actually have installed, so `alt+1`–`alt+9`
 always mean something. Their order is fixed on purpose — a number that points at

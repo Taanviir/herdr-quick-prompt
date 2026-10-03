@@ -28,6 +28,7 @@ if (workspace) args.push("--env", `QUICK_PROMPT_WORKSPACE=${workspace}`);
 // A popup has no pane of its own, so the split destinations need to be told
 // which pane the user was sitting in.
 if (pane) args.push("--env", `QUICK_PROMPT_PANE=${pane}`);
+if (process.argv.includes("--duplicate")) args.push("--env", "QUICK_PROMPT_DUPLICATE=1");
 
 const res = run(args, { check: false });
 if (res.ok === false) {
