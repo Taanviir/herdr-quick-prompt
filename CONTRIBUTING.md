@@ -43,6 +43,7 @@ testing the published copy.
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/worktree.js` | Branch names for the worktree destination, and the git repository check |
 | `lib/state.js` | Preferences, prompt history, launch requests and the draft under `HERDR_PLUGIN_STATE_DIR` |
+| `lib/presets.js` | Reading `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
 
 ## Things that will bite you
 
