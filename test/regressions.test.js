@@ -213,6 +213,18 @@ function stateIn(t, prefix) {
   return { dir, api: state.context.module.exports };
 }
 
+test("state files are replaced whole, never rewritten in place", (t) => {
+  const { dir, api } = stateIn(t, "qp-atomic-test-");
+  api.recordPrompt("first");
+  const file = path.join(dir, "history.json");
+  const before = fs.statSync(file).ino;
+  api.recordPrompt("second");
+  assert.notEqual(fs.statSync(file).ino, before, "a reader holding the old file still sees all of it");
+  api.writeRequest({ kind: "codex", prompt: "x" });
+  api.remember("codex", "tab", "/tmp", null);
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), []);
+});
+
 test("a failed launch becomes the draft and a successful one leaves nothing", (t) => {
   const { dir, api } = stateIn(t, "qp-recovery-test-");
   const request = { kind: "gemini", prompt: "recover this", cwd: "/tmp/", destination: "down" };
