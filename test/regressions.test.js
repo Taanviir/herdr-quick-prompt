@@ -362,6 +362,39 @@ test("requests abandoned by a killed worker are swept, live ones are not", (t) =
   assert.equal(fs.existsSync(draft), true, "recoverable drafts are not requests and are not swept");
 });
 
+test("prompt history keeps the last fifty launches, newest first and without repeats", (t) => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-history-test-"));
+  t.after(() => {
+    for (const name of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, name));
+    fs.rmdirSync(dir);
+  });
+
+  const state = load("lib/state.js", {}, "const STATE_DIR =");
+  state.context.process.env.HERDR_PLUGIN_STATE_DIR = dir;
+  const source = fs.readFileSync(path.resolve(__dirname, "../lib/state.js"), "utf8");
+  vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
+  const api = state.context.module.exports;
+
+  assert.deepEqual([...api.readHistory()], []);
+  api.recordPrompt("first");
+  api.recordPrompt("  second\n");
+  api.recordPrompt("   ");
+  api.recordPrompt("");
+  assert.deepEqual([...api.readHistory()], ["second", "first"], "trimmed, and blank launches are not kept");
+
+  api.recordPrompt("first");
+  assert.deepEqual([...api.readHistory()], ["first", "second"], "a repeat moves to the front instead of appearing twice");
+
+  for (let n = 0; n < 60; n += 1) api.recordPrompt(`prompt ${n}`);
+  const history = api.readHistory();
+  assert.equal(history.length, 50);
+  assert.equal(history[0], "prompt 59");
+  assert.equal(history[49], "prompt 10");
+
+  fs.writeFileSync(path.join(dir, "history.json"), "{ not json");
+  assert.deepEqual([...api.readHistory()], [], "a damaged history must not prevent opening the picker");
+});
+
 test("word motion and deletion stop at whitespace from either side", () => {
   const { Editor } = require("../lib/editor");
   const editor = new Editor("fix  the bug");
