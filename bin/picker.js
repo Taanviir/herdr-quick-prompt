@@ -64,10 +64,10 @@ sweepStaleRequests();
 // Another plugin can open the picker with the prompt already written, as
 // Scratchpad does with notes. A handed-over prompt never touches the drafts:
 // it did not come from this box, and the one you left here stays for later.
-const handoff = process.env.QUICK_PROMPT_TEXT || null;
+let handoff = process.env.QUICK_PROMPT_TEXT || null;
 const { draft = null, file: openedDraft = null } = (handoff ? null : readDraft()) ?? {};
 // A handed-over prompt from Scratchpad is already a note there.
-const canSaveNote = !handoff && scratchpad.available();
+let canSaveNote = !handoff && scratchpad.available();
 // The draft file this popup opened, and the only one it may replace or clear:
 // a launch that fails while it is open leaves a draft of its own. Null once
 // thrown away, so the notice says so only once, and always null for a handoff.
@@ -1339,6 +1339,11 @@ function launch(anyway = null, { stay = false } = {}) {
 // Ready for another, with what it was sent to still chosen.
 function ready(notice) {
   draftFile = null;
+  // Whatever comes next is typed here, so it is a draft and can be a note.
+  if (handoff) {
+    handoff = null;
+    canSaveNote = scratchpad.available();
+  }
   state.prompt = new Editor("");
   state.history = new History(readHistory());
   state.notice = notice;
