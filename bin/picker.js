@@ -15,7 +15,7 @@ const { catalog, cachedCatalog, refreshCatalog, runningAgent } = require("../lib
 const { Editor } = require("../lib/editor");
 const { History } = require("../lib/history");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft, logCrash } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, rememberModel, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft, logCrash } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
@@ -24,7 +24,7 @@ const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 const { modelsFor, effortsFor, normalize, modelLabel } = require("../lib/models");
 const { PRESETS, readPresets, composePrompt } = require("../lib/presets");
-const { insideRepo } = require("../lib/worktree");
+const { insideRepo, branchSlug } = require("../lib/worktree");
 const { runningAgents, matches } = require("../lib/running");
 const scratchpad = require("../lib/scratchpad");
 
@@ -64,10 +64,10 @@ sweepStaleRequests();
 // Another plugin can open the picker with the prompt already written, as
 // Scratchpad does with notes. A handed-over prompt never touches the drafts:
 // it did not come from this box, and the one you left here stays for later.
-const handoff = process.env.QUICK_PROMPT_TEXT || null;
+let handoff = process.env.QUICK_PROMPT_TEXT || null;
 const { draft = null, file: openedDraft = null } = (handoff ? null : readDraft()) ?? {};
 // A handed-over prompt from Scratchpad is already a note there.
-const canSaveNote = !handoff && scratchpad.available();
+let canSaveNote = !handoff && scratchpad.available();
 // The draft file this popup opened, and the only one it may replace or clear:
 // a launch that fails while it is open leaves a draft of its own. Null once
 // thrown away, so the notice says so only once, and always null for a handoff.
@@ -101,17 +101,24 @@ let launchAnyway = null;
 const draftDestination = DESTINATIONS.some((d) => d.id === draft?.destination) ? draft.destination : null;
 const draftModel = draft && (draft.model !== undefined || draft.effort !== undefined);
 
+// A worktree needs a repository, and the directory may not be one this time.
+function initialDestination(id) {
+  if (id === "worktree" && !insideRepo(draft?.cwd ?? cwd)) return 0;
+  return Math.max(0, DESTINATIONS.findIndex((d) => d.id === id));
+}
+
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
   agent: initialAgent(draft?.kind, prefs.recents[0]),
-  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draftDestination ?? prefs.destination))),
+  destination: initialDestination(draftDestination ?? prefs.destination),
   prompt: new Editor(handoff ?? draft?.prompt ?? ""),
   history: new History(readHistory()),
   cwd: draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   preset: draft?.preset ?? null,
   followUp: draft?.followUp ?? null, // the running agent Enter sends to, instead of launching
   models: draftModel ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
-  overlay: null, // { type: "agents" | "dirs" | "presets" | "model" | "running", ... } while a picker is open
+  killed: "", // what ctrl+u last cleared, for ctrl+y
+  overlay: null, // { type: "agents" | "dirs" | "presets" | "model" | "running" | "help", ... } while one is open
   notice: handoff ? `From ${process.env.QUICK_PROMPT_SOURCE || "another plugin"} · ⏎ launch · ctrl+r follow up instead`
     : draft?.failed ? `Recovered failed ${draft.followUp ? "follow-up" : "launch"} · edit or Enter to retry · ctrl+u clear`
     : draft ? "Restored draft · ctrl+u clear" : null,
@@ -136,8 +143,15 @@ const height = () => Math.max(8, out.rows ?? 12);
 const content = () => Math.max(28, width() - GUTTER * 2);
 const agent = () => agents[state.agent];
 const destination = () => DESTINATIONS[state.destination];
-// null for a kind with no model picker.
-const choice = () => (modelsFor(agent().kind) ? normalize(agent().kind, state.models[agent().kind]) : null);
+// null for a kind with no model picker. A preset's model holds for its own
+// agent, or for any when it names none, until one is picked with ctrl+o.
+function choice() {
+  const kind = agent().kind;
+  if (!modelsFor(kind)) return null;
+  const preset = state.preset;
+  const fromPreset = preset && !state.modelPicked && (preset.model || preset.effort) && (!preset.agent || preset.agent === kind);
+  return normalize(kind, fromPreset ? preset : state.models[kind]);
+}
 
 // The chip row is the agents you actually have, plus whatever is selected. The
 // other twenty kinds Herdr knows about are noise until you go looking (ctrl+k).
@@ -171,7 +185,11 @@ function useCatalog(items) {
 async function lookUpDuplicate() {
   const before = { kind: agent().kind, cwd: state.cwd };
   const found = await runningAgent(originPane);
-  if (!found || agent().kind !== before.kind || state.cwd !== before.cwd) return;
+  if (agent().kind !== before.kind || state.cwd !== before.cwd) return;
+  if (!found) {
+    state.notice ??= "no agent here · starting from your last agent";
+    return scheduleRender();
+  }
   state.agent = initialAgent(found.kind, before.kind);
   if (found.cwd) state.cwd = found.cwd;
   scheduleRender();
@@ -212,14 +230,34 @@ function render() {
 function mainBody(inner, rows) {
   const lines = new Array(rows).fill("");
   lines[1] = state.followUp ? followUpRow(inner) : chipRow(inner);
-  if (state.preset) lines[2] = presetRow();
 
-  const caret = promptBlock(lines, 3, Math.max(1, rows - 6), inner);
+  const { caret, above, below } = promptBlock(lines, 3, Math.max(1, rows - 6), inner);
+  lines[2] = statusRow(inner, above);
 
-  lines[rows - 3] = style.dim("─".repeat(inner));
+  lines[rows - 3] = rule(inner, below);
   lines[rows - 2] = state.followUp ? followUpWhere(inner) : destinationRow(inner);
-  lines[rows - 1] = state.notice ? style.warn(state.notice) : style.dim(hints());
+  lines[rows - 1] = state.notice ? style.warn(state.notice) : style.dim(hints(inner));
   return { lines, caret };
+}
+
+// Above the prompt: the preset on the left, and on the right where you are in
+// history and how much of a long prompt is scrolled out of view.
+function statusRow(inner, above) {
+  const notes = [];
+  if (state.history.position) notes.push(`history ${state.history.position}/${state.history.entries.length}`);
+  if (above) notes.push(`↑ ${above} more`);
+  const right = style.dim(notes.join(" · "));
+  if (!state.preset) return notes.length ? " ".repeat(Math.max(0, inner - displayWidth(right))) + right : "";
+
+  let left = presetRow(true);
+  if (displayWidth(left) + displayWidth(right) + 1 > inner) left = presetRow(false);
+  return left + " ".repeat(Math.max(1, inner - displayWidth(left) - displayWidth(right))) + right;
+}
+
+function rule(inner, below) {
+  if (!below) return style.dim("─".repeat(inner));
+  const label = ` ↓ ${below} more `;
+  return style.dim(`${"─".repeat(Math.max(0, inner - displayWidth(label) - 2))}${label}──`);
 }
 
 function chipRow(inner) {
@@ -227,7 +265,7 @@ function chipRow(inner) {
   const label = (item, index) => `${index < SHORTCUTS ? `${index + 1} ` : ""}${item.kind}${missing(item.kind)}`;
 
   const hint = noneInstalled ? "no agent found on PATH · ctrl+k" : "ctrl+k";
-  const room = inner - hint.length - 6;
+  const room = inner - displayWidth(`+${agents.length} more · ${hint}`) - 1;
 
   const shown = [];
   let used = 0;
@@ -261,7 +299,7 @@ function chipRow(inner) {
     .join(" ");
 
   const hidden = agents.length - shown.length;
-  const tail = noneInstalled ? style.warn(hint) : style.dim(hidden > 0 ? `+${hidden} ${hint}` : hint);
+  const tail = noneInstalled ? style.warn(hint) : style.dim(hidden > 0 ? `+${hidden} more · ${hint}` : hint);
   const gap = Math.max(1, inner - displayWidth(row) - displayWidth(tail));
   return row + " ".repeat(gap) + tail;
 }
@@ -275,38 +313,137 @@ function promptBlock(lines, top, rows, inner) {
     lines[top + index] = marker + style.bright(line);
   });
 
-  return { row: top + (caret.row - from), col: 2 + caret.col };
+  return {
+    caret: { row: top + (caret.row - from), col: 2 + caret.col },
+    above: from,
+    below: Math.max(0, wrapped.length - from - rows),
+  };
 }
 
 // The popup's title bar has no room for the working directory, so it rides along
 // with the destination: what will happen, with which model, and where, each next
-// to the key that changes it. A long model name gives up its key hint before the
-// path is squeezed below legibility.
+// to the key that changes it. The model only shows once it is not the default.
+// Before the path is squeezed below legibility, the row gives up the model's
+// key hint, then the destination's, and then a worktree branch's length.
+const PATH_ROOM = 12;
+
 function destinationRow(inner) {
   const join = ` ${style.dim("·")} `;
-  const row = (model) => {
-    const parts = [`${destination().label} ${style.dim("(ctrl+t)")}`, model].filter(Boolean);
+  const tail = ` ${style.dim("(ctrl+d)")}`;
+  const picked = choice();
+  const model = picked && (picked.model || picked.effort) ? modelLabel(picked) : null;
+  const branch = destination().id === "worktree" ? branchSlug(state.prompt.text, state.preset) || null : null;
+
+  const head = ({ modelKey = true, branchWidth = Infinity, destinationKey = true } = {}) => {
+    const where = destination().id === "worktree"
+      ? `${destination().label} ${style.dim("·")} ${branch ? truncate(branch, branchWidth) : style.dim("random branch")}`
+      : destination().label;
+    const parts = [
+      destinationKey ? `${where} ${style.dim("(ctrl+t)")}` : where,
+      model && (modelKey ? `${model} ${style.dim("(ctrl+o)")}` : model),
+    ].filter(Boolean);
     return `${style.dim("→")} ${parts.join(join)}${join}`;
   };
-  const tail = ` ${style.dim("(ctrl+d)")}`;
-  const room = (head) => inner - displayWidth(head) - displayWidth(tail);
+  const room = (text) => inner - displayWidth(text) - displayWidth(tail);
 
-  const label = choice() && modelLabel(choice());
-  let head = row(label && `${label} ${style.dim("(ctrl+o)")}`);
-  if (room(head) < 12) head = row(label);
+  let chosen = head();
+  if (room(chosen) < PATH_ROOM) chosen = head({ modelKey: false });
+  if (room(chosen) < PATH_ROOM) chosen = head({ modelKey: false, destinationKey: false });
+  if (room(chosen) < PATH_ROOM && branch) {
+    const branchWidth = Math.max(8, displayWidth(branch) - (PATH_ROOM - room(chosen)));
+    chosen = head({ modelKey: false, destinationKey: false, branchWidth });
+  }
 
-  return `${head}${shortenPath(state.cwd, Math.max(12, room(head)))}${tail}`;
+  return `${chosen}${shortenPath(state.cwd, Math.max(PATH_ROOM, room(chosen)))}${tail}`;
 }
 
-function presetRow() {
-  return `${style.dim("preset")} ${style.accent(state.preset.name)}  ${style.dim("ctrl+p change · ctrl+x clear")}`;
+function presetRow(withKeys) {
+  const name = `${style.dim("preset")} ${style.accent(state.preset.name)}`;
+  return withKeys ? `${name}  ${style.dim("ctrl+p change · ctrl+x clear")}` : name;
 }
 
-function hints() {
-  if (state.followUp) return "⏎ send · ctrl+r other agent · ctrl+v paste · \\⏎ newline · esc back";
-  const verb = composePrompt(state.preset, state.prompt.text) ? "⏎ launch" : "⏎ open agent";
-  if (canSaveNote) return `${verb} · tab agent · ctrl+r follow up · ctrl+s note · esc cancel`;
-  return `${verb} · tab agent · ctrl+r follow up · \\⏎ newline · esc cancel`;
+// What the next key is likely to be: on an empty prompt, ways to fill it; once
+// typing, ways to send it. Everything else is behind ctrl+g.
+function hints(inner) {
+  let parts;
+  if (state.followUp) {
+    parts = ["⏎ send", "ctrl+r other agent", "\\⏎ newline", "esc back", "ctrl+g keys"];
+  } else if (state.prompt.isEmpty) {
+    const verb = composePrompt(state.preset, "") ? "⏎ launch" : null;
+    const history = state.history.entries.length ? "↑ history" : null;
+    parts = [verb, history, "ctrl+p presets", "ctrl+r follow up", "ctrl+g keys"].filter(Boolean);
+  } else {
+    parts = ["⏎ launch", "ctrl+l launch & stay", canSaveNote && "ctrl+s note", "\\⏎ newline", "esc close"].filter(Boolean);
+  }
+  return fit(parts, inner);
+}
+
+// Keeps the first and last, dropping from just before the last until it fits.
+function fit(parts, width) {
+  const kept = [...parts];
+  while (kept.length > 2 && displayWidth(kept.join(" · ")) > width) kept.splice(-2, 1);
+  return kept.join(" · ");
+}
+
+/* ---------- every key ---------- */
+
+const KEYS = [
+  ["⏎", "launch"],
+  ["ctrl+l", "launch, stay here"],
+  ["\\⏎ shift+⏎", "new line"],
+  ["↑ ↓", "lines, then history"],
+  ["tab alt+1…9", "next or Nth agent"],
+  ["ctrl+k", "every agent"],
+  ["ctrl+t", "where it opens"],
+  ["ctrl+d", "directory"],
+  ["ctrl+o", "model and effort"],
+  ["ctrl+p ctrl+x", "preset, remove it"],
+  ["ctrl+r", "follow up an agent"],
+  ["ctrl+s", "save as a note"],
+  ["ctrl+v", "paste clipboard"],
+  ["ctrl+u ctrl+y", "clear, bring back"],
+  ["ctrl+w", "delete a word"],
+  ["ctrl+a ctrl+e", "line start, end"],
+  ["esc", "close, keep draft"],
+];
+
+function helpBody(inner, rows) {
+  const lines = new Array(rows).fill("");
+  lines[0] = style.dim("keys");
+  const keyWidth = Math.max(...KEYS.map(([key]) => displayWidth(key))) + 1;
+  const cell = ([key, what], width) => truncate(`${style.accent(pad(key, keyWidth))}${what}`, width);
+
+  // Two columns when they fit, otherwise one that scrolls.
+  const columns = inner >= 66 ? 2 : 1;
+  const perColumn = Math.ceil(KEYS.length / columns);
+  const room = rows - 3;
+  const top = columns === 1 ? Math.min(state.overlay.top, Math.max(0, KEYS.length - room)) : 0;
+  state.overlay.top = top;
+  const half = Math.floor(inner / columns);
+  for (let row = 0; row < Math.min(perColumn, room); row += 1) {
+    const left = KEYS[top + row];
+    const right = columns === 2 ? KEYS[perColumn + row] : null;
+    lines[2 + row] = pad(cell(left, half - 1), half) + (right ? cell(right, half - 1) : "");
+  }
+  lines[rows - 1] = style.dim(columns === 1 ? "↑↓ scroll · esc back" : "esc back");
+  return { lines, caret: null };
+}
+
+function onHelpKey(chunk, key) {
+  switch (true) {
+    case key.name === "escape" || (key.ctrl && key.name === "g"):
+      state.overlay = null;
+      break;
+    case key.name === "up":
+      state.overlay.top = Math.max(0, state.overlay.top - 1);
+      break;
+    case key.name === "down":
+      state.overlay.top += 1;
+      break;
+    default:
+      return;
+  }
+  scheduleRender();
 }
 
 /* ---------- follow-up to a running agent ---------- */
@@ -353,7 +490,10 @@ function runningBody(inner, rows) {
   const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
 
   list.slice(start, start + room).forEach((entry, index) => {
-    const detail = `${entry.kind} · ${entry.status} · ${shortenPath(entry.cwd, 20)} `;
+    // The title is what tells agents apart, so the path gives way first.
+    const status = `${entry.kind} · ${entry.status} `;
+    const pathRoom = Math.min(20, inner - displayWidth(status) - Math.min(displayWidth(entry.title), 24) - 6);
+    const detail = pathRoom >= 8 ? `${status}· ${shortenPath(entry.cwd, pathRoom)} ` : status;
     const name = pad(truncate(` ${entry.title}`, inner - displayWidth(detail) - 2), inner - displayWidth(detail));
     const plain = entry.status === "blocked" ? style.warn(detail) : style.dim(detail);
     lines[1 + index] = start + index === active ? style.selected(name + detail) : name + plain;
@@ -371,7 +511,10 @@ function onRunningKey(chunk, key) {
   state.overlay.error = null;
 
   switch (true) {
-    case key.name === "escape" || (key.ctrl && key.name === "r"):
+    case key.name === "escape":
+      escapeOverlay();
+      break;
+    case key.ctrl && key.name === "r":
       state.overlay = null;
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
@@ -488,7 +631,7 @@ function onModelKey(chunk, key) {
 
   switch (true) {
     case key.name === "escape" || (key.ctrl && key.name === "o"):
-      state.overlay = null;
+      escapeOverlay();
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
       moveModel(-1);
@@ -504,6 +647,8 @@ function onModelKey(chunk, key) {
       break;
     case key.name === "return" || key.name === "enter":
       state.models[overlay.kind] = { model: models[overlay.index], effort: overlay.effort };
+      rememberModel(overlay.kind, state.models[overlay.kind]);
+      state.modelPicked = true;
       state.overlay = null;
       break;
     default:
@@ -528,11 +673,11 @@ function presetsBody(inner, rows) {
     : style.dim("preset");
 
   // A broken entry is skipped, so say which one rather than let it vanish.
-  let footer = rows - 1;
+  let footer = rows - 2;
   if (presetProblems.length) {
     const more = presetProblems.length > 1 ? ` (+${presetProblems.length - 1} more)` : "";
-    lines[rows - 2] = style.warn(`${presetProblems[0]}${more}`);
-    footer = rows - 2;
+    lines[rows - 3] = style.warn(`${presetProblems[0]}${more}`);
+    footer = rows - 3;
   }
 
   if (presets.length === 0) {
@@ -550,22 +695,37 @@ function presetsBody(inner, rows) {
   const room = footer - 1;
   const active = Math.min(state.overlay.index, list.length - 1);
   const start = Math.max(0, Math.min(active - Math.floor(room / 2), list.length - room));
-  const detailWidth = 18;
+  const detailWidth = Math.min(30, Math.max(10, inner - 30));
   const nameWidth = Math.max(10, inner - detailWidth - 5);
 
   list.slice(start, start + room).forEach((item, index) => {
     const at = start + index;
     const name = pad(truncate(item.name, nameWidth), nameWidth);
-    const detail = style.dim(pad(truncate([item.agent && `${item.agent}${missing(item.agent)}`, item.task === "skip" ? "skip" : null]
-      .filter(Boolean).join(" · "), detailWidth), detailWidth));
+    const model = (item.model || item.effort) && [item.model, item.effort].filter(Boolean).join(" ");
+    const parts = [item.agent && `${item.agent}${missing(item.agent)}`, model, item.destination, item.task === "skip" ? "skip" : null];
+    const detail = style.dim(pad(truncate(parts.filter(Boolean).join(" · "), detailWidth), detailWidth));
     const mark = item.name === state.preset?.name ? style.ok("●") : " ";
     lines[1 + index] = at === active
       ? `${style.selected(` ${name}`)} ${detail} ${mark}`
       : ` ${name} ${detail} ${mark}`;
   });
 
+  lines[rows - 2] = presetPreview(list[active], inner);
   lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ apply, again to remove · esc back");
   return { lines, caret: null };
+}
+
+// What the highlighted preset sends, with your prompt in the middle.
+function presetPreview(preset, inner) {
+  const flat = (text) => text.replace(/\s+/g, " ").trim();
+  const prefix = flat(preset.prefix);
+  const postfix = flat(preset.postfix);
+  const middle = "‹prompt›";
+  const room = inner - displayWidth(middle) - 2;
+  const postWidth = Math.min(displayWidth(postfix), Math.max(Math.floor(room / 2), room - displayWidth(prefix)));
+  const before = prefix ? `${truncate(prefix, room - postWidth)} ` : "";
+  const after = postfix ? ` ${truncate(postfix, postWidth)}` : "";
+  return style.dim(before) + style.accent(middle) + style.dim(after);
 }
 
 function openPresets() {
@@ -583,6 +743,7 @@ function applyPreset(preset) {
     return;
   }
   state.preset = preset;
+  state.modelPicked = false;
   if (state.followUp) return;
   if (preset.agent) {
     const index = agents.findIndex((item) => item.kind === preset.agent);
@@ -592,6 +753,11 @@ function applyPreset(preset) {
     }
     state.agent = index;
   }
+  if (preset.destination === "worktree" && !insideRepo(state.cwd)) {
+    state.notice = `preset ${preset.name}: no worktree outside a git repository`;
+    return;
+  }
+  if (preset.destination) state.destination = DESTINATIONS.findIndex((d) => d.id === preset.destination);
   if (preset.task === "skip" && state.prompt.isEmpty) launch();
 }
 
@@ -600,9 +766,12 @@ function onPresetsKey(chunk, key) {
 
   switch (true) {
     case key.name === "escape":
+      escapeOverlay();
+      break;
+    case key.ctrl && key.name === "p":
       state.overlay = null;
       break;
-    case key.name === "up" || (key.ctrl && key.name === "p"):
+    case key.name === "up":
       state.overlay.index = Math.max(0, Math.min(state.overlay.index, list.length - 1) - 1);
       break;
     case key.name === "down" || (key.ctrl && key.name === "n"):
@@ -711,6 +880,9 @@ function onDirsKey(chunk, key) {
 
   switch (true) {
     case key.name === "escape":
+      escapeOverlay();
+      break;
+    case key.ctrl && key.name === "d":
       state.overlay = null;
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
@@ -827,10 +999,26 @@ async function pasteFromClipboard() {
 
 function onEscape() {
   if (state.overlay) {
-    state.overlay = null;
+    escapeOverlay();
     return scheduleRender();
   }
   back();
+}
+
+// A filter goes before the list does, so a mistyped one costs a single esc
+// rather than the list and the place in it.
+function escapeOverlay() {
+  const overlay = state.overlay;
+  if (overlay.filter) {
+    overlay.filter = "";
+    overlay.index = 0;
+  } else if (overlay.input?.text) {
+    overlay.input = new Editor();
+    overlay.index = 0;
+    overlay.selectionMoved = false;
+  } else {
+    state.overlay = null;
+  }
 }
 
 // Out of a follow-up and back to launching, or out of the picker altogether.
@@ -878,16 +1066,19 @@ function onMainKey(chunk, key) {
     // Up and down walk the prompt's own lines first and history only past its
     // top and bottom, so a multi-line prompt stays editable.
     case key.name === "up":
-      if (!prompt.moveVertical(-1, content() - 2)) recall(state.history.older(prompt.text));
+      if (!prompt.moveVertical(-1, content() - 2)) recall(state.history.older(snapshot()));
       break;
     case key.name === "down":
       if (!prompt.moveVertical(1, content() - 2)) recall(state.history.newer());
       break;
     case key.name === "escape":
       return back();
+    case key.ctrl && key.name === "l":
+      return launch(anyway, { stay: true });
     // A running agent already has its kind, its place and its directory.
     case Boolean(state.followUp) && launchControl(key):
-      return;
+      state.notice = "following up · esc to launch a new agent instead";
+      break;
     case isNewline(chunk, key):
       prompt.insert("\n");
       break;
@@ -918,6 +1109,9 @@ function onMainKey(chunk, key) {
     case key.ctrl && key.name === "p":
       openPresets();
       break;
+    case key.ctrl && key.name === "g":
+      state.overlay = { type: "help", top: 0 };
+      break;
     case key.ctrl && key.name === "x":
       state.preset = null;
       break;
@@ -930,6 +1124,7 @@ function onMainKey(chunk, key) {
       pickChip(Number(key.name) - 1);
       break;
     case key.ctrl && key.name === "u":
+      if (prompt.text) state.killed = prompt.text;
       prompt.clear();
       // The draft notice offers this as the way to be rid of the draft, so it
       // has to actually throw it away rather than just empty the buffer.
@@ -939,8 +1134,11 @@ function onMainKey(chunk, key) {
         // What the draft brought along goes with it; a choice made since stays.
         if (state.followUp === draft.followUp) state.followUp = null;
         if (state.preset === draft.preset) state.preset = null;
-        state.notice = "draft discarded";
+        state.notice = "draft discarded · ctrl+y brings it back";
       }
+      break;
+    case key.ctrl && key.name === "y":
+      prompt.insert(state.killed);
       break;
     default:
       if (!editKey(prompt, chunk, key)) return;
@@ -954,8 +1152,21 @@ function launchControl(key) {
     || (key.meta && /^[1-9]$/.test(key.name ?? ""));
 }
 
-function recall(text) {
-  if (text !== null) state.prompt = new Editor(text);
+// What is on screen, in the shape of a history entry.
+function snapshot() {
+  return { text: state.prompt.text, kind: agent().kind, preset: state.preset?.name ?? null, model: choice() };
+}
+
+// A running agent keeps its own kind and model, so a follow-up takes the text
+// and the preset only.
+function recall(entry) {
+  if (!entry) return;
+  state.prompt = new Editor(entry.text);
+  state.preset = presets.find((item) => item.name === entry.preset) ?? null;
+  if (state.followUp) return;
+  const at = agents.findIndex((item) => item.kind === entry.kind);
+  if (at >= 0) state.agent = at;
+  if (entry.model && modelsFor(entry.kind)) state.models[entry.kind] = entry.model;
 }
 
 // Plain \r launches. \n is ctrl+j, or shift+enter and ctrl+enter as
@@ -1018,7 +1229,10 @@ function onAgentsKey(chunk, key) {
   const list = overlayMatches();
 
   switch (true) {
-    case key.name === "escape" || (key.ctrl && key.name === "k"):
+    case key.name === "escape":
+      escapeOverlay();
+      break;
+    case key.ctrl && key.name === "k":
       state.overlay = null;
       break;
     case key.name === "up" || (key.ctrl && key.name === "p"):
@@ -1066,6 +1280,7 @@ function isPrintable(chunk, key) {
 
 const OVERLAYS = {
   agents: { body: agentsBody, key: onAgentsKey },
+  help: { body: helpBody, key: onHelpKey },
   dirs: { body: dirsBody, key: onDirsKey },
   model: { body: modelBody, key: onModelKey },
   presets: { body: presetsBody, key: onPresetsKey },
@@ -1074,8 +1289,10 @@ const OVERLAYS = {
 
 /* ---------- launch ---------- */
 
-function launch(anyway = null) {
-  if (state.followUp) return sendFollowUp();
+// With `stay`, the agent opens without taking focus and the popup stays up
+// for the next one.
+function launch(anyway = null, { stay = false } = {}) {
+  if (state.followUp) return sendFollowUp({ stay });
 
   const chosen = agent();
   if (!chosen) return quit(0);
@@ -1095,8 +1312,9 @@ function launch(anyway = null) {
     return scheduleRender();
   }
 
-  remember(chosen.kind, destination().id, state.cwd, choice());
-  recordPrompt(state.prompt.text);
+  // A preset's destination is the preset's, not a new default.
+  remember(chosen.kind, state.preset?.destination === destination().id ? null : destination().id, state.cwd);
+  recordPrompt({ text: state.prompt.text, kind: chosen.kind, preset: state.preset?.name ?? null, model: choice() });
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
@@ -1107,23 +1325,39 @@ function launch(anyway = null) {
     cwd: state.cwd,
     workspace,
     pane: originPane,
+    stay,
     ...(handoff && { handoff: true }),
   });
   // Only once the request holds the prompt.
   clearDraft(draftFile);
 
   spawnDetached(process.execPath, [LAUNCHER, request]);
-  quit(0);
+  if (!stay) return quit(0);
+  ready(`${chosen.kind} is opening in a ${destination().label} · type the next one`);
+}
+
+// Ready for another, with what it was sent to still chosen.
+function ready(notice) {
+  draftFile = null;
+  // Whatever comes next is typed here, so it is a draft and can be a note.
+  if (handoff) {
+    handoff = null;
+    canSaveNote = scratchpad.available();
+  }
+  state.prompt = new Editor("");
+  state.history = new History(readHistory());
+  state.notice = notice;
+  scheduleRender();
 }
 
 // A running agent is already at its prompt, so an empty one has nothing to do.
-function sendFollowUp() {
+function sendFollowUp({ stay = false } = {}) {
   if (!composePrompt(state.preset, state.prompt.text)) {
     state.notice = "type a follow-up to send";
     return scheduleRender();
   }
   const { target, title, kind, cwd } = state.followUp;
-  recordPrompt(state.prompt.text);
+  recordPrompt({ text: state.prompt.text, preset: state.preset?.name ?? null });
   const request = writeRequest({
     submittedAt: Date.now(),
     kind,
@@ -1135,7 +1369,8 @@ function sendFollowUp() {
   });
   clearDraft(draftFile);
   spawnDetached(process.execPath, [LAUNCHER, request]);
-  quit(0);
+  if (!stay) return quit(0);
+  ready(`sending to ${truncate(title, 30)} · type the next one`);
 }
 
 // Not now: the prompt becomes a Scratchpad note for this directory, and the
@@ -1152,7 +1387,7 @@ function saveNote() {
     if (!saved.ok) {
       state.notice = `not saved: ${saved.message}`;
     } else {
-      recordPrompt(text);
+      recordPrompt({ text, kind: agent().kind, preset: state.preset?.name ?? null, model: choice() });
       clearDraft(draftFile);
       notify("Quick Prompt", `Saved to Scratchpad: ${saved.message}`, "done");
       return quit(0);

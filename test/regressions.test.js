@@ -119,7 +119,7 @@ function failedLaunch(destination, startReply, { deliver = () => {} } = {}) {
     "../lib/state": { finishRequest: () => {} },
     "../lib/timing": { createTiming: () => null },
     "../lib/agents": { supportsInlinePrompt: () => false },
-    "../lib/worktree": { branchName: () => "fix-the-login-bug", uniqueBranch: (_, name) => name },
+    "../lib/worktree": { branchName: () => "fix-the-login-bug", uniqueBranch: (_, name) => name, worktreeBase: () => null },
     "../lib/herdr": {
       HerdrError: Error,
       notify: (...args) => notifications.push(args),
@@ -237,7 +237,7 @@ function picker(draft = null, {
       suggestions: () => [],
       ...dirs,
     },
-    "../lib/worktree": { insideRepo: (dir) => dir === "/repo" },
+    "../lib/worktree": { ...require("../lib/worktree"), insideRepo: (dir) => dir === "/repo" },
     "../lib/clipboard": { readClipboard: () => clipboard() },
   }, "/* ---------- boot ---------- */", { ...(running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {}), ...env });
   ui.evaluate("quit = () => {}");
@@ -264,17 +264,22 @@ test("ctrl+t offers a worktree only inside a git repository, and launch refuses 
   assert.equal(requests.length, 0, "nothing was launched");
 });
 
-test("the worktree destination branches from the prompt and starts the agent in its pane", () => {
+// A worktree launch of `request` in a repository whose origin/HEAD is
+// `originHead`, and where fix-the-login-bug is already taken.
+function worktreeLaunch(request, { originHead = null, env = {} } = {}) {
   const calls = [];
   const worktree = load("lib/worktree.js", {
     "node:child_process": {
-      // fix-the-login-bug already exists, so the launch takes the next name.
-      spawnSync: (_, args) => ({ status: args.at(-1) === "refs/heads/fix-the-login-bug" ? 0 : 1, stdout: "" }),
+      spawnSync: (_, args) => {
+        if (args.includes("symbolic-ref")) return { status: originHead ? 0 : 1, stdout: originHead ? `${originHead}\n` : "" };
+        if (args.includes("rev-parse")) return { status: 0, stdout: `${args.at(-1).replace("^{commit}", "")}@commit\n` };
+        return { status: args.at(-1) === "refs/heads/fix-the-login-bug" ? 0 : 1, stdout: "" };
+      },
     },
-  }).context.module.exports;
+  }, null, env).context.module.exports;
   const launcher = load("bin/launch.js", {
     "../lib/worktree": worktree,
-    "node:fs": { readFileSync: () => JSON.stringify({ kind: "claude", prompt: "Fix the login bug", destination: "worktree", cwd: "/repo" }) },
+    "node:fs": { readFileSync: () => JSON.stringify({ kind: "claude", destination: "worktree", cwd: "/repo", ...request }) },
     "../lib/timing": { createTiming: () => null },
     "../lib/agents": { supportsInlinePrompt: () => true },
     "../lib/herdr": {
@@ -286,11 +291,44 @@ test("the worktree destination branches from the prompt and starts the agent in 
     },
   }, "try {\n  main();");
   launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  launcher.evaluate("waitInteractive = () => true; deliverPrompt = () => {}");
   assert.doesNotThrow(() => launcher.evaluate("main()"));
+  return calls;
+}
+
+test("the worktree destination branches from the prompt and starts the agent in its pane", () => {
+  const calls = worktreeLaunch({ prompt: "Fix the login bug" });
   const created = calls.find((args) => args[0] === "worktree");
   assert.equal(created.join(" "), "worktree create --cwd /repo --branch fix-the-login-bug-2 --label fix-the-login-bug-2 --focus");
   const started = calls.find((args) => args[1] === "start");
   assert.equal(started[started.indexOf("--pane") + 1], "w2:p1");
+});
+
+test("a worktree branches from origin/HEAD, or QUICK_PROMPT_WORKTREE_BASE when set", () => {
+  const base = (calls) => {
+    const created = calls.find((args) => args[0] === "worktree");
+    return created.includes("--base") ? created[created.indexOf("--base") + 1] : null;
+  };
+  assert.equal(base(worktreeLaunch({ prompt: "x" }, { originHead: "origin/main" })), "origin/main@commit", "a commit, so the branch does not track origin");
+  assert.equal(base(worktreeLaunch({ prompt: "x" })), null, "no remote default leaves Herdr branching from HEAD");
+  assert.equal(base(worktreeLaunch({ prompt: "x" }, { originHead: "origin/main", env: { QUICK_PROMPT_WORKTREE_BASE: "release" } })), "release@commit");
+});
+
+test("an empty prompt with a preset names the worktree branch after the preset", () => {
+  const calls = worktreeLaunch({ prompt: "", preset: { name: "Fix tests", prefix: "Run the tests.", postfix: "", task: "skip" } });
+  const created = calls.find((args) => args[0] === "worktree");
+  assert.equal(created[created.indexOf("--branch") + 1], "fix-tests");
+});
+
+test("the destination row shows the branch a worktree will get", () => {
+  const ui = picker();
+  const row = () => ui.evaluate("destinationRow(71)").replace(/\x1b\[[0-9;]*m/g, "");
+  ui.evaluate("state.cwd = '/repo'; state.destination = DESTINATIONS.findIndex((d) => d.id === 'worktree')");
+  assert.match(row(), /new worktree · random branch \(ctrl\+t\)/);
+  ui.evaluate("state.prompt = new Editor('Fix the login bug')");
+  assert.match(row(), /new worktree · fix-the-login-bug \(ctrl\+t\)/);
+  ui.evaluate("state.prompt = new Editor(''); state.preset = { name: 'nightly', prefix: 'x', postfix: '', task: 'skip' }");
+  assert.match(row(), /new worktree · nightly/);
 });
 
 test("an agent outside the first five remains selected and visible", () => {
@@ -402,13 +440,13 @@ test("the prompt is wrapped once per edit and width, and the caret still follows
 
 test("state files are replaced whole, never rewritten in place", (t) => {
   const { dir, api } = stateIn("qp-atomic-test-");
-  api.recordPrompt("first");
+  api.recordPrompt({ text: "first" });
   const file = path.join(dir, "history.json");
   const before = fs.statSync(file).ino;
-  api.recordPrompt("second");
+  api.recordPrompt({ text: "second" });
   assert.notEqual(fs.statSync(file).ino, before, "a reader holding the old file still sees all of it");
   api.writeRequest({ kind: "codex", prompt: "x" });
-  api.remember("codex", "tab", "/tmp", null);
+  api.remember("codex", "tab", "/tmp");
   assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), []);
 });
 
@@ -755,23 +793,156 @@ test("directory suggestions only check the remembered directories, not every nei
   assert.deepEqual(statted, [here, gone, path.join(root, "third")]);
 });
 
-test("setup detects both TOML quote styles and treats punctuation literally", () => {
+test("setup matches keys and actions in either quote style, and punctuation literally", () => {
+  const { isBound, isKeyTaken } = require("../bin/setup");
   for (const key of ["prefix+shift+c", "prefix+.", "prefix+["]) {
     for (const quote of ['"', "'"]) {
-      const setup = load("bin/setup.js", {
-        "node:fs": { existsSync: () => true, readFileSync: () => "" },
-        "node:child_process": { spawnSync: () => ({ stdout: "Config: /tmp/mock.toml" }) },
-      }, "const key =");
-      setup.context.process.env.QUICK_PROMPT_KEY = key;
-      const source = fs.readFileSync(path.resolve(__dirname, "../bin/setup.js"), "utf8");
-      vm.runInContext(source.slice(source.indexOf("const key ="), source.indexOf("if (existing.test(config))")), setup.context);
-      const binding = `key = ${quote}${key}${quote}`;
-      assert.equal(setup.evaluate(`existing.test(${JSON.stringify(binding)})`), true);
-      if (key.endsWith(".")) {
-        assert.equal(setup.evaluate('existing.test("key = \\\"prefix+x\\\"")'), false);
-      }
+      assert.equal(isKeyTaken(`key = ${quote}${key}${quote}`, key), true);
+      assert.equal(isKeyTaken(`  split_right = ${quote}${key}${quote}`, key), true, "any binding, not only a command's");
     }
   }
+  assert.equal(isKeyTaken('key = "prefix+x"', "prefix+."), false);
+  assert.equal(isBound("command = 'taanviir.quick-prompt.open'", "open"), true);
+  assert.equal(isBound('command = "taanviir.quick-prompt.open"', "duplicate"), false);
+});
+
+test("setup binds open and duplicate each unless already bound, and says which key clashes", () => {
+  const { plan } = require("../bin/setup");
+  const keys = (config, env = {}) => plan(config, env).add.map((binding) => `${binding.action} ${binding.key}`);
+  assert.deepEqual(keys(""), ["open prefix+shift+c", "duplicate prefix+shift+a"]);
+  assert.deepEqual(keys('command = "taanviir.quick-prompt.open"'), ["duplicate prefix+shift+a"],
+    "open bound by hand does not stop duplicate being added later");
+  assert.deepEqual(keys("", { QUICK_PROMPT_KEY: "alt+q", QUICK_PROMPT_DUPLICATE_KEY: "alt+w" }), ["open alt+q", "duplicate alt+w"]);
+  const clash = plan('[keys]\nzoom = "prefix+shift+a"\n', {});
+  assert.deepEqual(clash.add.map((binding) => binding.action), ["open"]);
+  assert.match(clash.skipped[0], /prefix\+shift\+a is already bound; set QUICK_PROMPT_DUPLICATE_KEY/);
+});
+
+test("setup writes both bindings into the config file Herdr names, once", () => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-setup-"));
+  scratch.push(dir);
+  const config = path.join(dir, "config.toml");
+  const log = path.join(dir, "calls.log");
+  const herdr = path.join(dir, "herdr");
+  fs.writeFileSync(herdr, `#!/bin/sh\necho "$*" >> "${log}"\n[ "$1" = --help ] && echo "Config: ${config}" || echo '{"result":{}}'\n`, { mode: 0o755 });
+  const setup = (env = {}) => require("node:child_process").spawnSync(process.execPath, [path.resolve(__dirname, "../bin/setup.js")], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: dir, HERDR_BIN_PATH: herdr, ...env },
+  });
+
+  fs.writeFileSync(config, '[keys]\nprefix = "ctrl+b"\n');
+  const first = setup();
+  assert.equal(first.status, 0, first.stdout);
+  const written = fs.readFileSync(config, "utf8");
+  assert.match(written, /^prefix = "ctrl\+b"$/m);
+  assert.match(written, /key = "prefix\+shift\+c"\ntype = "plugin_action"\ncommand = "taanviir\.quick-prompt\.open"/);
+  assert.match(written, /key = "prefix\+shift\+a"\ntype = "plugin_action"\ncommand = "taanviir\.quick-prompt\.duplicate"/);
+  assert.equal(fs.readFileSync(`${config}.bak-quick-prompt`, "utf8"), '[keys]\nprefix = "ctrl+b"\n');
+  assert.match(fs.readFileSync(log, "utf8"), /^server reload-config$/m);
+
+  const again = setup();
+  assert.equal(again.status, 0);
+  assert.match(again.stdout, /Already bound/);
+  assert.equal(fs.readFileSync(config, "utf8"), written);
+});
+
+test("the key that opens a list closes it, and esc clears a filter before closing", () => {
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(null, { runningList: parseAgents({ agents: LISTED }), presets: [{ name: "review", agent: null, prefix: "x", postfix: "", task: "ask" }] });
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex')");
+  for (const letter of ["k", "d", "o", "p", "r"]) {
+    const press = `onKey('', {ctrl: true, name: '${letter}'})`;
+    ui.evaluate(press);
+    assert.ok(ui.evaluate("state.overlay"), `ctrl+${letter} opens`);
+    ui.evaluate(press);
+    assert.equal(ui.evaluate("state.overlay"), null, `ctrl+${letter} closes`);
+  }
+  for (const letter of ["k", "p", "r"]) {
+    ui.evaluate(`onKey('', {ctrl: true, name: '${letter}'}); onKey('x', {name: 'x'})`);
+    ui.context.onData(Buffer.from([0x1b]));
+    assert.equal(ui.evaluate("state.overlay.filter"), "", `ctrl+${letter}: esc clears the filter`);
+    ui.context.onData(Buffer.from([0x1b]));
+    assert.equal(ui.evaluate("state.overlay"), null, `ctrl+${letter}: a second esc closes`);
+  }
+  ui.evaluate("onKey('', {ctrl: true, name: 'd'}); onKey('t', {name: 't'})");
+  ui.context.onData(Buffer.from([0x1b]));
+  assert.equal(ui.evaluate("state.overlay.input.text"), "");
+  ui.context.onData(Buffer.from([0x1b]));
+  assert.equal(ui.evaluate("state.overlay"), null);
+});
+
+test("the hint line suits the moment: ways to fill an empty prompt, ways to send a typed one", () => {
+  const { displayWidth } = require("../lib/text");
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(null, { runningList: parseAgents({ agents: LISTED }) });
+  assert.equal(ui.evaluate("hints(71)"), "ctrl+p presets · ctrl+r follow up · ctrl+g keys");
+  const withHistory = picker(null, { history: [{ text: "older" }] });
+  assert.equal(withHistory.evaluate("hints(71)"), "↑ history · ctrl+p presets · ctrl+r follow up · ctrl+g keys");
+  ui.evaluate("state.prompt = new Editor('fix it')");
+  assert.equal(ui.evaluate("hints(71)"), "⏎ launch · ctrl+l launch & stay · \\⏎ newline · esc close");
+  assert.equal(ui.evaluate("hints(30)"), "⏎ launch · esc close", "a narrow popup keeps the first and last");
+  const scratchpad = { available: () => true, save: () => assert.fail("not saved") };
+  const notes = picker(null, { scratchpad });
+  notes.evaluate("state.prompt = new Editor('fix it')");
+  assert.equal(notes.evaluate("hints(80)"), "⏎ launch · ctrl+l launch & stay · ctrl+s note · \\⏎ newline · esc close");
+  assert.equal(notes.evaluate("hints(60)"), "⏎ launch · ctrl+l launch & stay · ctrl+s note · esc close", "the note outlasts the newline");
+  const handedOver = picker(null, { scratchpad, env: { QUICK_PROMPT_TEXT: "from notes" } });
+  assert.doesNotMatch(handedOver.evaluate("hints(80)"), /ctrl\+s/, "a handed-over prompt is a note already");
+  ui.evaluate("openRunning(); onRunningKey('\\r', {name: 'return'})");
+  assert.match(ui.evaluate("hints(71)"), /^⏎ send · ctrl\+r other agent .* esc back · ctrl\+g keys$/);
+  for (const width of [40, 71]) {
+    for (const line of [...ui.evaluate(`mainBody(${width}, 16)`).lines]) assert.ok(displayWidth(line) <= width);
+  }
+});
+
+test("ctrl+g lists every key, and closes again", () => {
+  const { displayWidth } = require("../lib/text");
+  const ui = picker();
+  ui.evaluate("onKey('\\x07', {ctrl: true, name: 'g'})");
+  assert.equal(ui.evaluate("state.overlay.type"), "help");
+  const text = ui.evaluate("helpBody(71, 16)").lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+  for (const key of ["ctrl+l", "ctrl+s", "shift+⏎", "ctrl+k", "ctrl+t", "ctrl+d", "ctrl+o", "ctrl+p", "ctrl+x", "ctrl+r", "ctrl+v", "ctrl+u", "ctrl+y", "alt+1", "esc"]) {
+    assert.ok(text.includes(key), key);
+  }
+  ui.evaluate("onKey('', {name: 'down'}); onKey('', {name: 'down'})");
+  const narrow = [...ui.evaluate("helpBody(40, 16)").lines];
+  assert.ok(narrow.every((line) => displayWidth(line) <= 40));
+  assert.match(narrow[2], /new line/, "one column scrolls");
+  ui.evaluate("onKey('\\x07', {ctrl: true, name: 'g'})");
+  assert.equal(ui.evaluate("state.overlay"), null);
+});
+
+test("the rows around the prompt say where you are in history and what is scrolled away", () => {
+  const ui = picker(null, { history: [{ text: Array.from({ length: 14 }, (_, n) => `line ${n + 1}`).join("\n") }, { text: "older" }] });
+  const plain = () => [...ui.evaluate("mainBody(71, 16)").lines].map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.equal(plain()[2], "");
+  ui.evaluate("onMainKey(undefined, {name: 'up'})");
+  assert.match(plain()[2], /history 1\/2 · ↑ 4 more$/);
+  for (let i = 0; i < 13; i += 1) ui.evaluate("onMainKey(undefined, {name: 'up'})");
+  assert.match(plain()[2], /^ +history 1\/2$/);
+  assert.match(plain()[13], /─ ↓ 4 more ──$/);
+  ui.evaluate("onMainKey(undefined, {name: 'up'})");
+  assert.match(plain()[2], /history 2\/2$/);
+});
+
+test("the chip row says how many more agents ctrl+k has", () => {
+  const ui = picker(null, { installed: ["claude", "codex"] });
+  assert.match(ui.evaluate("chipRow(71)").replace(/\x1b\[[0-9;]*m/g, ""), /\+4 more · ctrl\+k$/);
+});
+
+test("ctrl+y puts back what ctrl+u cleared, at the cursor", () => {
+  const ui = picker();
+  ui.evaluate("state.prompt = new Editor('fix the login bug'); onMainKey('', {ctrl: true, name: 'u'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "");
+  ui.evaluate("onMainKey('', {ctrl: true, name: 'u'})");
+  ui.evaluate("state.prompt = new Editor('please '); onMainKey('', {ctrl: true, name: 'y'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "please fix the login bug", "clearing an empty box keeps the earlier text");
+
+  const restored = picker({ kind: "codex", prompt: "lost work" });
+  restored.evaluate("onMainKey('', {ctrl: true, name: 'u'})");
+  assert.match(restored.evaluate("state.notice"), /ctrl\+y brings it back/);
+  restored.evaluate("onMainKey('', {ctrl: true, name: 'y'})");
+  assert.equal(restored.evaluate("state.prompt.text"), "lost work");
 });
 
 test("clearing a restored draft throws it away instead of emptying the buffer", () => {
@@ -826,21 +997,27 @@ test("prompt history keeps the last fifty launches, newest first and without rep
   vm.runInContext(source.slice(source.indexOf("const STATE_DIR =")), state.context);
   const api = state.context.module.exports;
 
-  assert.deepEqual([...api.readHistory()], []);
-  api.recordPrompt("first");
-  api.recordPrompt("  second\n");
-  api.recordPrompt("   ");
-  api.recordPrompt("");
-  assert.deepEqual([...api.readHistory()], ["second", "first"], "trimmed, and blank launches are not kept");
+  const texts = () => [...api.readHistory()].map((entry) => entry.text);
+  assert.deepEqual(texts(), []);
+  api.recordPrompt({ text: "first" });
+  api.recordPrompt({ text: "  second\n", kind: "codex", preset: "review", model: { model: "gpt-5.5", effort: null } });
+  api.recordPrompt({ text: "   " });
+  api.recordPrompt({ text: "" });
+  assert.deepEqual(texts(), ["second", "first"], "trimmed, and blank launches are not kept");
+  assert.deepEqual({ ...api.readHistory()[0], model: { ...api.readHistory()[0].model } },
+    { text: "second", kind: "codex", preset: "review", model: { model: "gpt-5.5", effort: null } });
 
-  api.recordPrompt("first");
-  assert.deepEqual([...api.readHistory()], ["first", "second"], "a repeat moves to the front instead of appearing twice");
+  api.recordPrompt({ text: "first" });
+  assert.deepEqual(texts(), ["first", "second"], "a repeat moves to the front instead of appearing twice");
 
-  for (let n = 0; n < 60; n += 1) api.recordPrompt(`prompt ${n}`);
-  const history = api.readHistory();
+  for (let n = 0; n < 60; n += 1) api.recordPrompt({ text: `prompt ${n}` });
+  const history = texts();
   assert.equal(history.length, 50);
   assert.equal(history[0], "prompt 59");
   assert.equal(history[49], "prompt 10");
+
+  fs.writeFileSync(path.join(dir, "history.json"), JSON.stringify(["a plain string from before"]));
+  assert.deepEqual(texts(), [], "entries without their launch settings are dropped");
 
   fs.writeFileSync(path.join(dir, "history.json"), "{ not json");
   assert.deepEqual([...api.readHistory()], [], "a damaged history must not prevent opening the picker");
@@ -860,7 +1037,7 @@ test("history walks back to the oldest entry and forward to the draft it set asi
 });
 
 test("up and down recall history only past the top and bottom of the prompt", () => {
-  const ui = picker(null, { history: ["second\nline", "first"] });
+  const ui = picker(null, { history: [{ text: "second\nline" }, { text: "first" }] });
   const press = (name) => ui.evaluate(`onMainKey(undefined, {name: '${name}'}); state.prompt.text`);
 
   ui.evaluate("state.prompt = new Editor('draft')");
@@ -876,6 +1053,26 @@ test("up and down recall history only past the top and bottom of the prompt", ()
   ui.evaluate("state.prompt = new Editor('one\\ntwo')");
   assert.equal(press("up"), "one\ntwo", "up inside a multi-line draft still moves between its lines");
   assert.equal(ui.evaluate("state.prompt.cursor"), 3);
+});
+
+test("recalling a prompt brings back its agent, preset and model, and walking back restores yours", () => {
+  const review = { name: "review", agent: null, prefix: "Review:", postfix: "", task: "ask" };
+  const ui = picker(null, {
+    presets: [review],
+    history: [{ text: "check the diff", kind: "codex", preset: "review", model: { model: "gpt-5.5", effort: "high" } }],
+  });
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'claude'); state.prompt = new Editor('mine')");
+  ui.evaluate("onMainKey(undefined, {name: 'up'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "check the diff");
+  assert.equal(ui.evaluate("agent().kind"), "codex");
+  assert.equal(ui.evaluate("state.preset.name"), "review");
+  assert.deepEqual({ ...ui.evaluate("choice()") }, { model: "gpt-5.5", effort: "high" });
+  assert.equal(ui.evaluate("state.history.position"), 1);
+  ui.evaluate("onMainKey(undefined, {name: 'down'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "mine");
+  assert.equal(ui.evaluate("agent().kind"), "claude");
+  assert.equal(ui.evaluate("state.preset"), null);
+  assert.equal(ui.evaluate("state.history.position"), null);
 });
 
 test("launching records the prompt in history", () => {
@@ -896,7 +1093,8 @@ test("launching records the prompt in history", () => {
     "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
   }, "/* ---------- boot ---------- */");
   ui.evaluate("quit = () => {}; state.prompt = new Editor('fix the bug'); launch()");
-  assert.deepEqual(recorded, ["fix the bug"]);
+  assert.deepEqual(recorded.map((entry) => ({ ...entry, model: { ...entry.model } })),
+    [{ text: "fix the bug", kind: "claude", preset: null, model: { model: null, effort: null } }]);
 });
 
 test("a paste far larger than the call stack lands whole, at the cursor", () => {
@@ -1090,7 +1288,7 @@ test("ctrl+o picks a model and effort for the selected agent only", () => {
   const { displayWidth } = require("../lib/text");
   const ui = picker();
   ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex')");
-  assert.match(ui.evaluate("destinationRow(71)"), /default model/);
+  assert.doesNotMatch(ui.evaluate("destinationRow(71)"), /model|ctrl+o/, "the default model leaves the row to the path");
   ui.evaluate("onMainKey('\\x0f', {ctrl: true, name: 'o'})");
   assert.equal(ui.evaluate("state.overlay.type"), "model");
   ui.evaluate("onModelKey('', {name: 'down'}); onModelKey('', {name: 'right'}); onModelKey('', {name: 'right'})");
@@ -1108,7 +1306,7 @@ test("ctrl+o picks a model and effort for the selected agent only", () => {
   assert.ok(displayWidth(row) <= 71, "a long model name must not push the row past the popup");
 
   ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'claude')");
-  assert.match(ui.evaluate("destinationRow(71)"), /default model/, "each kind keeps its own choice");
+  assert.doesNotMatch(ui.evaluate("destinationRow(71)"), /gpt|model/, "each kind keeps its own choice");
   ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'gemini'); onMainKey('\\x0f', {ctrl: true, name: 'o'})");
   assert.equal(ui.evaluate("state.overlay"), null);
   assert.match(ui.evaluate("state.notice"), /no model choice for gemini/);
@@ -1130,6 +1328,39 @@ test("a preset selects its agent, shows itself, and comes off when picked again 
   ui.evaluate("onMainKey('', {ctrl: true, name: 'x'})");
   assert.equal(ui.evaluate("state.preset"), null);
   assert.equal(ui.evaluate("mainBody(71, 16).lines[2]"), "");
+});
+
+test("a preset can choose the model and destination, and the list shows what it sends", () => {
+  const { displayWidth } = require("../lib/text");
+  const fast = { name: "fast", agent: "claude", prefix: "Be quick about this one, and do not overthink it.", postfix: "Reply in one line.",
+    task: "ask", model: "sonnet", effort: "low", destination: "right" };
+  const tree = { name: "tree", agent: null, prefix: "", postfix: "", task: "ask", model: null, effort: null, destination: "worktree" };
+  const requests = [];
+  const ui = picker(null, { presets: [fast, tree], requests });
+  ui.evaluate("openPresets()");
+  const body = ui.evaluate("presetsBody(71, 16)").lines;
+  assert.match(body[1], /claude · sonnet low · right/);
+  const preview = body[14].replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(preview, /^Be quick about this one.* ‹prompt› Reply in one line\.$/);
+  assert.ok(displayWidth(preview) <= 71);
+
+  ui.evaluate("onPresetsKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("destination().id"), "right");
+  assert.deepEqual({ ...ui.evaluate("choice()") }, { model: "sonnet", effort: "low" });
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex')");
+  assert.deepEqual({ ...ui.evaluate("choice()") }, { model: null, effort: null }, "only for the preset's own agent");
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'claude'); openModels(); onModelKey('', {name: 'up'}); onModelKey('\\r', {name: 'return'})");
+  assert.equal(ui.evaluate("choice().model"), "opus", "a model picked by hand wins over the preset's");
+
+  ui.evaluate("state.prompt = new Editor('go'); launch()");
+  assert.equal(requests[0].destination, "right");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(ui.dir, "prefs.json"), "utf8")).destination, "tab",
+    "the preset's destination does not become the default");
+
+  const outside = picker(null, { presets: [tree] });
+  outside.evaluate("applyPreset(presets[0])");
+  assert.equal(outside.evaluate("destination().id"), "tab");
+  assert.match(outside.evaluate("state.notice"), /no worktree outside a git repository/);
 });
 
 test("a skip preset launches over an empty prompt but not over a typed one", () => {
@@ -1405,6 +1636,8 @@ test("ctrl+s saves the prompt to Scratchpad from its directory and closes", () =
   ui.evaluate("quit = () => quitHook(); onMainKey('\x13', { ctrl: true, name: 's' })");
   assert.deepEqual(saves, [{ text: "look at the flaky test", cwd: "/repo", pane: undefined }]);
   assert.equal(ui.drafts(), null, "the draft is gone once it is a note");
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.state.readHistory()[0])), { text: "look at the flaky test", kind: "claude", preset: null, model: { model: null, effort: null } },
+    "it is in history like a launch");
   assert.equal(quit, true);
 });
 
@@ -1443,6 +1676,11 @@ test("duplicate selects the focused pane's agent and directory over recency and 
   await unknown.evaluate("lookUpDuplicate()");
   assert.equal(unknown.evaluate("agent().kind"), "gemini", "a kind the catalog lacks falls back to recency");
   assert.equal(unknown.evaluate("state.cwd"), "/tmp");
+
+  const empty = picker(null, { recents: ["gemini"] });
+  await empty.evaluate("lookUpDuplicate()");
+  assert.equal(empty.evaluate("agent().kind"), "gemini");
+  assert.equal(empty.evaluate("state.notice"), "no agent here · starting from your last agent");
 
   const changed = picker(null, { running: { kind: "codex", cwd: "/work/tree" }, recents: ["gemini"] });
   const pending = changed.evaluate("lookUpDuplicate()");
@@ -1517,6 +1755,7 @@ test("a follow-up goes to the chosen agent, and esc backs out one step at a time
   assert.equal(ui.evaluate("state.agent"), agentBefore, "the agent is fixed in a follow-up");
   assert.equal(ui.evaluate("destination().id"), "tab");
   assert.equal(ui.evaluate("state.overlay"), null);
+  assert.equal(ui.evaluate("state.notice"), "following up · esc to launch a new agent instead", "the key is not just ignored");
 
   ui.evaluate("onMainKey('\\r', {name: 'return'})");
   assert.equal(requests.length, 0, "an empty follow-up is not sent");
@@ -1528,6 +1767,15 @@ test("a follow-up goes to the chosen agent, and esc backs out one step at a time
 
   ui.evaluate("onMainKey('', {name: 'escape'})");
   assert.equal(ui.evaluate("state.followUp"), null, "esc leaves follow-up mode before it closes the picker");
+});
+
+test("in a narrow running list the title keeps its room and the path goes", () => {
+  const { parseAgents } = require("../lib/running");
+  const ui = picker(null, { runningList: parseAgents({ agents: LISTED }) });
+  ui.evaluate("openRunning()");
+  const plain = (width) => ui.evaluate(`runningBody(${width}, 8)`).lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.match(plain(40)[3], /Refactor auth +claude · working $/);
+  assert.match(plain(71)[3], /Refactor auth +claude · working · \/work\/api $/);
 });
 
 test("a blocked agent is marked in the running list and cannot be chosen", () => {
@@ -1648,4 +1896,116 @@ test("the worker sends a follow-up to the running agent without starting anythin
     assert.deepEqual(finished, [ok]);
     if (!ok) assert.match(notifications[0][1], /Fix the build.*agent is blocked.*recover your draft/);
   }
+});
+
+test("a workspace or worktree launch is not kept as the next popup's destination", () => {
+  const { dir, api } = stateIn("qp-sticky-test-");
+  const destination = () => JSON.parse(fs.readFileSync(path.join(dir, "prefs.json"), "utf8")).destination;
+  api.remember("codex", "right", "/tmp");
+  assert.equal(destination(), "right");
+  api.remember("codex", "worktree", "/repo");
+  assert.equal(destination(), "right");
+  api.remember("codex", "workspace", "/tmp");
+  assert.equal(destination(), "right");
+  api.remember("codex", "tab", "/tmp");
+  assert.equal(destination(), "tab");
+});
+
+test("a remembered worktree outside a repository opens on a new tab", () => {
+  const prefs = { recents: [], destination: "worktree", directories: [], models: {} };
+  assert.equal(picker(null, { prefs }).evaluate("destination().id"), "tab");
+  const inRepo = picker({ kind: "claude", prompt: "x", destination: "worktree", cwd: "/repo" }, { prefs });
+  assert.equal(inRepo.evaluate("destination().id"), "worktree", "a draft made in a repository keeps it");
+});
+
+test("ctrl+l launches without leaving the popup, ready for the next prompt", () => {
+  const requests = [];
+  const ui = picker(null, { requests });
+  ui.evaluate("quits = 0; quit = () => { quits += 1 }");
+  ui.evaluate("state.prompt = new Editor('first job'); onMainKey('\\x0c', {ctrl: true, name: 'l'})");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].stay, true);
+  assert.equal(ui.evaluate("quits"), 0);
+  assert.equal(ui.evaluate("state.prompt.text"), "");
+  assert.match(ui.evaluate("state.notice"), /claude is opening in a new tab/);
+  ui.evaluate("onMainKey('', {name: 'up'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "first job", "it is in history already");
+
+  ui.evaluate("state.prompt = new Editor('second job'); onMainKey('\\r', {name: 'return'})");
+  assert.equal(requests[1].stay, false);
+  assert.equal(ui.evaluate("quits"), 1);
+});
+
+// The calls and notifications of a launch of `request` that goes through.
+function launchOf(request) {
+  const calls = [];
+  const notifications = [];
+  const launcher = load("bin/launch.js", {
+    "node:fs": { readFileSync: () => JSON.stringify(request) },
+    "../lib/state": { finishRequest: () => {} },
+    "../lib/timing": { createTiming: () => null },
+    "../lib/agents": { supportsInlinePrompt: () => true },
+    "../lib/worktree": { branchName: () => "fix-it", uniqueBranch: (_, name) => name, worktreeBase: () => null },
+    "../lib/herdr": {
+      HerdrError: Error,
+      notify: (...args) => notifications.push(args),
+      run: (args) => {
+        calls.push(args);
+        if (args[0] === "tab" || args[0] === "worktree") return { ok: true, result: { tab: { tab_id: "w1:t2" }, root_pane: { pane_id: "w1:p5" } } };
+        if (args[0] === "pane") return { ok: true, result: { pane: { pane_id: "w1:p6" } } };
+        return { ok: true, result: {} };
+      },
+    },
+  }, "try {\n  main();");
+  launcher.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
+  launcher.context.process.exit = () => {};
+  const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
+  launcher.evaluate(source.slice(source.indexOf("try {\n  main();")));
+  return { calls, notifications };
+}
+
+test("after a handed-over prompt launches and stays, the next one is yours", () => {
+  const scratchpad = { available: () => true, save: () => ({ ok: true, message: "" }) };
+  const ui = picker({ kind: "amp", prompt: "my own draft" }, { scratchpad, env: { QUICK_PROMPT_TEXT: "from notes" } });
+  ui.evaluate("onMainKey('\\x0c', {ctrl: true, name: 'l'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "");
+  ui.evaluate("state.prompt = new Editor('typed next')");
+  assert.match(ui.evaluate("hints(80)"), /ctrl\+s note/);
+  ui.evaluate("onEscape()");
+  const drafts = fs.readdirSync(ui.dir).filter((name) => name.startsWith("draft-"))
+    .map((name) => JSON.parse(fs.readFileSync(path.join(ui.dir, name), "utf8")).prompt).sort();
+  assert.deepEqual(drafts, ["my own draft", "typed next"], "kept beside the draft it never touched");
+});
+
+test("a launch that stays opens without focus and says where it went", () => {
+  const created = ({ calls }) => calls.find((args) => args[1] === "create" || args[1] === "split");
+  const quiet = launchOf({ kind: "claude", prompt: "fix it", destination: "tab", cwd: "/work/alpha" });
+  assert.ok(created(quiet).includes("--focus"));
+  assert.deepEqual(quiet.notifications, [], "you are looking at it already");
+
+  const stayed = launchOf({ kind: "claude", prompt: "fix it", destination: "tab", cwd: "/work/alpha", stay: true });
+  assert.ok(created(stayed).includes("--no-focus"));
+  assert.ok(!created(stayed).includes("--focus"));
+  assert.deepEqual(stayed.notifications.map((args) => [...args]), [["Quick Prompt", "claude started in a new tab (alpha)", "none"]]);
+
+  for (const destination of ["right", "workspace", "worktree"]) {
+    const other = launchOf({ kind: "codex", prompt: "fix it", destination, cwd: "/repo", pane: "w1:p1", stay: true });
+    assert.ok(created(other).includes("--no-focus"), destination);
+  }
+  const branch = launchOf({ kind: "codex", prompt: "fix it", destination: "worktree", cwd: "/repo", stay: true });
+  assert.equal(branch.notifications[0][1], "codex started on branch fix-it");
+});
+
+test("a follow-up that lands says so quietly", () => {
+  const { notifications } = launchOf({ kind: "codex", prompt: "and the docs", followUp: { target: "w1:p2", title: "Fix the build", kind: "codex" } });
+  assert.deepEqual(notifications.map((args) => [...args]), [["Quick Prompt", "sent to Fix the build", "none"]]);
+});
+
+test("a model picked with ctrl+o is kept even when the popup closes without launching", () => {
+  const ui = picker();
+  ui.evaluate("state.agent = agents.findIndex((a) => a.kind === 'codex'); openModels()");
+  ui.evaluate("onModelKey('', {name: 'down'}); onModelKey('', {name: 'right'}); onModelKey('\\r', {name: 'return'}); onEscape()");
+  const saved = JSON.parse(fs.readFileSync(path.join(ui.dir, "prefs.json"), "utf8")).models.codex;
+  assert.deepEqual(saved, { model: "gpt-6.1-sol", effort: "low" });
+  assert.deepEqual({ ...picker(null, { prefs: { recents: ["codex"], models: { codex: saved } } }).evaluate("choice()") }, saved);
 });

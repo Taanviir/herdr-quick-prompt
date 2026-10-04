@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
-const { slugify, randomName, branchName, uniqueBranch } = require("../lib/worktree");
+const { slugify, randomName, branchName, uniqueBranch, worktreeBase } = require("../lib/worktree");
 
 test("a prompt's first line becomes a lowercase, hyphenated branch name", () => {
   assert.equal(slugify("Fix the login bug"), "fix-the-login-bug");
@@ -31,6 +31,8 @@ test("a prompt with nothing to slug gets a random adj-noun-verb name", () => {
   assert.equal(randomName(() => 0), "amber-badger-bakes");
   assert.equal(randomName(() => 0.999), "witty-zephyr-wanders");
   assert.equal(branchName("Ship it"), "ship-it");
+  assert.equal(branchName("", { name: "Nightly review" }), "nightly-review");
+  assert.equal(branchName("Ship it", { name: "Nightly review" }), "ship-it", "a typed prompt still wins");
 });
 
 test("the first line with words in it names the branch, without any paths on it", () => {
@@ -54,4 +56,42 @@ test("a branch name is taken when branches live under it as well as when it exis
   assert.equal(uniqueBranch(dir, "fix"), "fix-2");
   assert.equal(uniqueBranch(dir, "fe"), "fe", "a shared prefix is not a clash");
   assert.equal(git("branch", uniqueBranch(dir, "feat")).status, 0, "git can create the name it picks");
+});
+
+test("a worktree's base is the remote's default branch when the repository has one", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qp-base-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (...args) => spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+  git("init", "-q", "-b", "work");
+  git("commit", "-q", "--allow-empty", "-m", "start");
+  assert.equal(worktreeBase(dir), null);
+  git("remote", "add", "origin", "https://example.invalid/repo.git");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  git("commit", "-q", "--allow-empty", "-m", "local work");
+  const originMain = git("rev-parse", "origin/main").stdout.trim();
+  assert.equal(worktreeBase(dir), originMain, "origin's default, as a commit");
+
+  git("branch", "fix-it", worktreeBase(dir));
+  assert.equal(git("config", "branch.fix-it.merge").stdout, "", "a branch made from it tracks nothing");
+});
+
+test("QUICK_PROMPT_WORKTREE_BASE picks the base, and is passed on as is when git cannot find it", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qp-base-test-"));
+  const before = process.env.QUICK_PROMPT_WORKTREE_BASE;
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (before === undefined) delete process.env.QUICK_PROMPT_WORKTREE_BASE;
+    else process.env.QUICK_PROMPT_WORKTREE_BASE = before;
+  });
+  const git = (...args) => spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+  git("init", "-q", "-b", "work");
+  git("commit", "-q", "--allow-empty", "-m", "start");
+  git("branch", "release");
+  git("commit", "-q", "--allow-empty", "-m", "later");
+
+  process.env.QUICK_PROMPT_WORKTREE_BASE = "release";
+  assert.equal(worktreeBase(dir), git("rev-parse", "release").stdout.trim());
+  process.env.QUICK_PROMPT_WORKTREE_BASE = "no-such-branch";
+  assert.equal(worktreeBase(dir), "no-such-branch");
 });

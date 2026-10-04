@@ -19,11 +19,14 @@ herdr plugin install Taanviir/herdr-quick-prompt
 herdr plugin action invoke taanviir.quick-prompt.setup
 ```
 
-The second command binds **ctrl+b** then **shift+c** in your `config.toml` and
-reloads Herdr. Set `QUICK_PROMPT_KEY` first to use another key.
+The second command adds two keys to your `config.toml` and reloads Herdr:
+**ctrl+b** then **shift+c** opens Quick Prompt, and **ctrl+b** then **shift+a**
+opens it on the agent in the current pane. Set `QUICK_PROMPT_KEY` or
+`QUICK_PROMPT_DUPLICATE_KEY` first to use other keys. A key that is already
+bound is left alone, and setup says which.
 
-To bind it by hand, or to add the `duplicate` action as well, put this in
-`~/.config/herdr/config.toml` and run `herdr server reload-config`:
+To bind them by hand, put this in `~/.config/herdr/config.toml` and run
+`herdr server reload-config`:
 
 ```toml
 [[keys.command]]
@@ -45,6 +48,7 @@ description = "Quick Prompt with the focused agent"
 | Key | |
 | --- | --- |
 | `⏎` | launch (an empty prompt just opens the agent) |
+| `ctrl+l` | launch without leaving where you are, and keep the popup open |
 | `shift+⏎`, `alt+⏎`, `ctrl+j`, `\` `⏎` | new line |
 | `↑` / `↓` | move between lines; past the first or last, earlier prompts |
 | `tab`, `alt+1`…`alt+9` | next agent, or jump to a numbered one |
@@ -56,8 +60,12 @@ description = "Quick Prompt with the focused agent"
 | `ctrl+r` | follow up on an agent that is already running |
 | `ctrl+s` | not now: save the prompt to [Scratchpad](https://github.com/Taanviir/herdr-scratchpad) as a note |
 | `ctrl+v` | paste from the system clipboard |
-| `ctrl+u` | clear the prompt |
+| `ctrl+u` / `ctrl+y` | clear the prompt / bring it back |
+| `ctrl+g` | list every key |
 | `esc` | close, keeping what you typed |
+
+In a list, the key that opened it closes it again, and `esc` clears what you
+typed to filter it before it closes the list.
 
 The usual word keys work too: `ctrl+←`/`→` or `alt+b`/`alt+f` to move by word,
 `ctrl+w` or `alt+backspace` to delete one, and `ctrl+a`/`ctrl+e` for the start
@@ -73,12 +81,21 @@ supports:
 
 ![The full agent list, with installed agents marked](docs/quick-prompt-agents.png)
 
-**Destination.** `ctrl+t` picks where the agent opens. A new worktree gets a
-branch named after the first line of your prompt, leaving out any paths ("Fix
-the login bug" becomes `fix-the-login-bug`), or a random name if the prompt is
-empty. The worktree option only appears inside a git repository. If the agent
-never starts, the tab, split or workspace made for it is closed again; a
-worktree is kept.
+**Destination.** `ctrl+t` picks where the agent opens. Tab and split are
+remembered for next time; a workspace or worktree is for one launch only. A
+new worktree gets a branch named after the first line of your prompt, leaving
+out any paths ("Fix the login bug" becomes `fix-the-login-bug`), after the
+preset if the prompt is empty, or a random name. The destination row shows the
+branch as you type. It branches from the commit `origin/HEAD` points at when
+the repository has one, otherwise from the current `HEAD`; set
+`QUICK_PROMPT_WORKTREE_BASE` to use another base. The new branch does not
+track its base, so a plain `git push` will not aim at `main`. The worktree option only appears inside a git repository.
+If the agent never starts, the tab, split or workspace made for it is closed
+again; a worktree is kept.
+
+**Launch and stay.** `ctrl+l` launches without moving focus and keeps the
+popup open with an empty prompt, so you can start several agents in a row. A
+Herdr notification says where each one went.
 
 **Directory.** `ctrl+d` lists the directory you are in, ones you launched into
 before, and neighbouring projects. Type to filter, or type a path starting with
@@ -87,12 +104,15 @@ before, and neighbouring projects. Type to filter, or type a path starting with
 ![The directory picker, listing neighbouring projects](docs/quick-prompt-directory.png)
 
 **Model and effort.** `ctrl+o` sets them for Claude Code and Codex. Each agent
-remembers its own choice. The model lists live in `lib/models.js`.
+remembers its own choice from the moment you pick it. The destination row
+shows the model once it is not the default. The model lists live in
+`lib/models.js`.
 
 **Follow-ups.** `ctrl+r` lists running agents, the ones waiting on you first.
 Pick one and Enter sends your prompt to it instead of starting a new agent.
-`esc` goes back to launching. A blocked agent cannot be picked until you answer
-it in its own pane, since Herdr will not prompt it.
+`esc` goes back to launching. A quiet notification says when the follow-up
+landed. A blocked agent cannot be picked until you answer it in its own pane,
+since Herdr will not prompt it.
 
 **Saving for later.** With [Scratchpad](https://github.com/Taanviir/herdr-scratchpad)
 installed, `ctrl+s` turns the prompt into a note instead of launching it. The
@@ -104,7 +124,7 @@ brings notes back here as a prompt.
 destination and directory for next time. A launch that fails comes back the
 same way, so you can retry. When several are waiting, the newest opens first
 and the rest follow one per opening. `↑` past the first line recalls your
-last 50 prompts.
+last 50 prompts, with the agent, preset and model each went to.
 
 **Pasting.** Pastes work in any terminal, and `ctrl+v` reads the clipboard
 itself. If you drop a macOS screenshot from its floating thumbnail, macOS
@@ -115,7 +135,8 @@ that path instead.
 ## Presets
 
 A preset wraps your prompt in text you would otherwise retype, and can pick
-the agent. Press `ctrl+p` to choose one. Presets live in `presets.json` in the
+the agent, model and destination. Press `ctrl+p` to choose one; the list shows
+the highlighted preset's text around your prompt. Presets live in `presets.json` in the
 plugin's config directory (`herdr plugin config-dir taanviir.quick-prompt`):
 
 ```json
@@ -129,6 +150,8 @@ plugin's config directory (`herdr plugin config-dir taanviir.quick-prompt`):
   {
     "name": "fix tests",
     "agent": "claude",
+    "model": "sonnet",
+    "destination": "worktree",
     "prefix": "Run the test suite and fix whatever fails.",
     "task": "skip"
   }
@@ -139,6 +162,8 @@ plugin's config directory (`herdr plugin config-dir taanviir.quick-prompt`):
 | --- | --- |
 | `name` | required, unique |
 | `agent` | optional agent kind, as listed under `ctrl+k`; ignored in a follow-up |
+| `model`, `effort` | optional, as listed under `ctrl+o`; checked against `agent` when it is set |
+| `destination` | optional: `tab`, `right`, `down`, `workspace` or `worktree` |
 | `prefix`, `postfix` | text sent before and after your prompt |
 | `task` | `skip` launches straight away when the prompt is empty, except in a follow-up |
 
@@ -152,7 +177,7 @@ Everything lives in the plugin state directory, normally
 | File | |
 | --- | --- |
 | `prefs.json` | recent agents, directories, destination, models |
-| `history.json` | your last 50 prompts, as plain text; delete it to forget them |
+| `history.json` | your last 50 prompts, with the agent, preset and model each went to; delete it to forget them |
 | `draft-*.json` | unsent and failed prompts, one per file, dropped after a day |
 | `attachments/` | copied screenshots, deleted after a week |
 | `catalog.json` | the agents Herdr supports and which are installed, so the popup opens without asking again |
