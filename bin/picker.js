@@ -11,7 +11,7 @@ const path = require("node:path");
 const { PassThrough } = require("node:stream");
 const { StringDecoder } = require("node:string_decoder");
 
-const { catalog, runningAgent } = require("../lib/agents");
+const { catalog, cachedCatalog, refreshCatalog, runningAgent } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
 const { History } = require("../lib/history");
 const { spawnDetached, notify } = require("../lib/herdr");
@@ -55,7 +55,10 @@ const workspace = process.env.QUICK_PROMPT_WORKSPACE ?? ctx.workspace_id ?? proc
 const originPane = process.env.QUICK_PROMPT_PANE ?? ctx.focused_pane_id ?? process.env.HERDR_PANE_ID;
 
 const prefs = readPrefs();
-const agents = catalog();
+// What the last popup found, while nothing it depends on has changed. It is
+// checked again once this one is up, in case an agent was installed since.
+const cachedAgents = cachedCatalog();
+let agents = cachedAgents ?? catalog();
 const { presets, problems: presetProblems } = readPresets();
 sweepStaleRequests();
 // Another plugin can open the picker with the prompt already written, as
@@ -69,9 +72,6 @@ const canSaveNote = !handoff && scratchpad.available();
 // a launch that fails while it is open leaves a draft of its own. Null once
 // thrown away, so the notice says so only once, and always null for a handoff.
 let draftFile = openedDraft;
-// The duplicate action starts from the agent in the pane you came from, which
-// is a deliberate ask, so it outranks both a restored draft and recency.
-const duplicate = process.env.QUICK_PROMPT_DUPLICATE ? runningAgent(originPane) : null;
 const out = process.stdout;
 
 // A paste is a burst of keypresses: inside it a newline is content, not "launch",
@@ -103,11 +103,11 @@ const draftModel = draft && (draft.model !== undefined || draft.effort !== undef
 
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
-  agent: initialAgent(duplicate?.kind, draft?.kind, prefs.recents[0]),
+  agent: initialAgent(draft?.kind, prefs.recents[0]),
   destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draftDestination ?? prefs.destination))),
   prompt: new Editor(handoff ?? draft?.prompt ?? ""),
   history: new History(readHistory()),
-  cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
+  cwd: draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   preset: draft?.preset ?? null,
   followUp: draft?.followUp ?? null, // the running agent Enter sends to, instead of launching
   models: draftModel ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
@@ -141,13 +141,40 @@ const choice = () => (modelsFor(agent().kind) ? normalize(agent().kind, state.mo
 
 // The chip row is the agents you actually have, plus whatever is selected. The
 // other twenty kinds Herdr knows about are noise until you go looking (ctrl+k).
-const chips = agents.filter((item) => item.installed);
-const noneInstalled = chips.length === 0;
+let chips = agents.filter((item) => item.installed);
+let noneInstalled = chips.length === 0;
 // Marks a kind that is not on PATH wherever one can be picked.
 const missing = (kind) => (agents.find((item) => item.kind === kind)?.installed === false ? " ○" : "");
 function chipAgents() {
   if (!chips.includes(agent())) chips.push(agent());
   return chips;
+}
+
+// A catalog that differs from the one painted replaces it, keeping the selected
+// agent selected. Returns whether anything changed.
+function useCatalog(items) {
+  const same = items.length === agents.length
+    && items.every((item, at) => item.kind === agents[at].kind && item.installed === agents[at].installed);
+  if (same) return false;
+  const selected = agent().kind;
+  agents = items;
+  state.agent = initialAgent(selected);
+  chips = agents.filter((item) => item.installed);
+  noneInstalled = chips.length === 0;
+  return true;
+}
+
+// The duplicate action starts from the agent in the pane you came from, which
+// is a deliberate ask, so it outranks both a restored draft and recency. Herdr
+// is asked after the first paint, and its answer is dropped if the agent or
+// directory was changed by hand while it came.
+async function lookUpDuplicate() {
+  const before = { kind: agent().kind, cwd: state.cwd };
+  const found = await runningAgent(originPane);
+  if (!found || agent().kind !== before.kind || state.cwd !== before.cwd) return;
+  state.agent = initialAgent(found.kind, before.kind);
+  if (found.cwd) state.cwd = found.cwd;
+  scheduleRender();
 }
 
 /* ---------- rendering ---------- */
@@ -170,18 +197,16 @@ function render() {
   const rows = height();
   const body = state.overlay ? OVERLAYS[state.overlay.type].body(inner, rows) : mainBody(inner, rows);
 
+  // Every row covers the full width, so nothing from the last frame survives
+  // and there is no need to clear the screen first.
+  const gutter = " ".repeat(GUTTER);
   const painted = [];
   for (let row = 0; row < rows; row += 1) {
-    painted.push(" ".repeat(GUTTER) + pad(truncate(body.lines[row] ?? "", inner), inner));
+    painted.push(gutter + pad(truncate(body.lines[row] ?? "", inner), inner) + gutter);
   }
 
-  out.write(`\x1b[2J\x1b[H${painted.join("\r\n")}`);
-
-  if (body.caret) {
-    out.write(`\x1b[${body.caret.row + 1};${GUTTER + body.caret.col + 1}H\x1b[?25h`);
-  } else {
-    out.write("\x1b[?25l");
-  }
+  const cursor = body.caret ? `\x1b[${body.caret.row + 1};${GUTTER + body.caret.col + 1}H\x1b[?25h` : "\x1b[?25l";
+  out.write(`\x1b[H${painted.join("\r\n")}${cursor}`);
 }
 
 function mainBody(inner, rows) {
@@ -611,10 +636,18 @@ function openDirectories() {
 
 // Empty: where you are, where you have been, and the neighbours of where you
 // are — usually the other project in the same folder. Typing filters that,
-// unless it looks like a path, in which case it completes one.
+// unless it looks like a path, in which case it completes one. Both read the
+// disk, so the list is kept until the text changes rather than redone per key.
 function directoryEntries() {
-  const text = state.overlay.input.text.trim();
-  const known = () => suggestions(state.cwd, prefs.directories);
+  const overlay = state.overlay;
+  const text = overlay.input.text.trim();
+  const key = `${state.cwd}\0${text}`;
+  if (overlay.listed?.key !== key) overlay.listed = { key, entries: listDirectories(overlay, text) };
+  return overlay.listed.entries;
+}
+
+function listDirectories(overlay, text) {
+  const known = () => (overlay.known ??= suggestions(state.cwd, prefs.directories));
 
   if (!text) return known();
   if (text.startsWith("/") || text.startsWith("~")) return complete(text);
@@ -734,10 +767,7 @@ function onKey(chunk, key = {}) {
   if (swallow) return;
 
   if (key.ctrl && key.name === "c") return quit(0);
-  if (key.ctrl && key.name === "v") {
-    pasteFromClipboard();
-    return scheduleRender();
-  }
+  if (key.ctrl && key.name === "v") return pasteFromClipboard();
   if (state.overlay) return OVERLAYS[state.overlay.type].key(chunk, key);
   return onMainKey(chunk, key);
 }
@@ -774,24 +804,25 @@ function onData(chunk) {
   return false;
 }
 
-// Reading the clipboard can block for a second on WSL, so say what is happening
-// before going to fetch it.
-function pasteFromClipboard() {
-  state.notice = "reading clipboard…";
-  render();
+// Reading the clipboard takes a quarter of a second or more on WSL. The popup
+// keeps taking keys meanwhile, and the text lands wherever the cursor is then.
+const PASTING = "pasting…";
+let pasting = false;
 
-  const text = readClipboard();
-  state.notice = null;
+async function pasteFromClipboard() {
+  if (pasting) return;
+  pasting = true;
+  state.notice = PASTING;
+  scheduleRender();
 
-  if (text === null) {
-    state.notice = "no clipboard tool found — install xclip, xsel or wl-clipboard";
-    return;
-  }
-  if (!text) {
-    state.notice = "clipboard is empty";
-    return;
-  }
-  insertPasted(text);
+  const text = await readClipboard();
+  pasting = false;
+  if (state.notice === PASTING) state.notice = null;
+
+  if (text === null) state.notice = "no clipboard tool found — install xclip, xsel or wl-clipboard";
+  else if (!text) state.notice = "clipboard is empty";
+  else insertPasted(text);
+  scheduleRender();
 }
 
 function onEscape() {
@@ -1190,6 +1221,11 @@ process.stdin.setRawMode(true);
 process.stdin.resume();
 out.on("resize", render);
 render();
-// Copies are only pruned on a drop otherwise, and someone who stops dropping
-// screenshots would keep the last week's for ever. Not before the first paint.
-setImmediate(() => prune(ATTACHMENTS));
+// None of this is needed for the first paint. Copies are only pruned on a drop
+// otherwise, and someone who stops dropping screenshots would keep the last
+// week's for ever.
+setImmediate(() => {
+  prune(ATTACHMENTS);
+  if (cachedAgents) refreshCatalog().then((items) => useCatalog(items) && scheduleRender());
+  if (process.env.QUICK_PROMPT_DUPLICATE) lookUpDuplicate();
+});

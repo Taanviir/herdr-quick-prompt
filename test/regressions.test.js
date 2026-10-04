@@ -200,7 +200,7 @@ function stateIn(prefix) {
 // The picker over a state directory of its own, starting from `draft` when
 // given. `ui.state` reads and writes that directory as the picker does.
 function picker(draft = null, {
-  running = null, runningList = [], requests = [], recents = [], history = [], presets = [],
+  running = null, runningList = [], requests = [], recents = [], history = [], presets = [], dirs = {}, clipboard = async () => null,
   installed = ["claude", "codex", "copilot", "cursor", "gemini"], prefs = { recents },
   env = {}, scratchpad = { available: () => false, save: () => ({ ok: true, message: "" }) },
 } = {}) {
@@ -217,7 +217,8 @@ function picker(draft = null, {
     "../lib/agents": {
       catalog: () => ["amp", "claude", "codex", "copilot", "cursor", "gemini"]
         .map((kind) => ({ kind, installed: installed.includes(kind) })),
-      runningAgent: (pane) => (pane === "w1:p2" ? running : null),
+      cachedCatalog: () => null,
+      runningAgent: async (pane) => (pane === "w1:p2" ? running : null),
     },
     "../lib/state": {
       ...api,
@@ -234,8 +235,10 @@ function picker(draft = null, {
       isDirectory: (value) => ["/tmp/", "/tmp/child"].includes(value),
       complete: () => ["/tmp/child"],
       suggestions: () => [],
+      ...dirs,
     },
     "../lib/worktree": { insideRepo: (dir) => dir === "/repo" },
+    "../lib/clipboard": { readClipboard: () => clipboard() },
   }, "/* ---------- boot ---------- */", { ...(running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {}), ...env });
   ui.evaluate("quit = () => {}");
   return Object.assign(ui, { dir, state: api, drafts: () => api.readDraft()?.draft ?? null });
@@ -370,6 +373,31 @@ test("vertical navigation keeps a preferred column through short and wrapped lin
   const ui = picker();
   ui.evaluate("state.prompt = new Editor('one\\ntwo'); onMainKey('', {name: 'up'})");
   assert.equal(ui.evaluate("state.prompt.cursor"), 3);
+});
+
+test("the prompt is wrapped once per edit and width, and the caret still follows the cursor", () => {
+  const { Editor } = require("../lib/editor");
+  const editor = new Editor("abcdefghij");
+  let wraps = 0;
+  const wrap = editor.wrap.bind(editor);
+  editor.wrap = (width) => { wraps += 1; return wrap(width); };
+
+  editor.moveVertical(-1, 4);
+  assert.deepEqual(editor.layout(4).caret, { row: 1, col: 2 });
+  editor.move(-1);
+  assert.deepEqual(editor.layout(4).caret, { row: 1, col: 1 });
+  assert.equal(wraps, 1, "moving the cursor reuses the wrapping");
+
+  editor.layout(5);
+  assert.equal(wraps, 2, "a new width wraps again");
+  for (const edit of ["insert('x')", "backspace()", "deleteForward()", "deleteWord()", "deleteWordForward()", "clear()"]) {
+    editor.insert("one two");
+    editor.layout(5);
+    const before = wraps;
+    new Function("editor", `editor.${edit}`)(editor);
+    assert.deepEqual(editor.layout(5).rows, new Editor(editor.text).layout(5).rows, edit);
+    assert.equal(wraps, before + 1, edit);
+  }
 });
 
 test("state files are replaced whole, never rewritten in place", (t) => {
@@ -513,6 +541,46 @@ test("a multiline prompt is typed in, since Herdr refuses newlines in launch arg
   assert.deepEqual(delivered, ["one\ntwo"]);
 });
 
+test("a typed-in prompt waits for the agent to start on it, and only a stall is sent again", () => {
+  const deliver = (replies) => {
+    const calls = [];
+    const slept = [];
+    const launcher = load("bin/launch.js", {
+      "../lib/herdr": {
+        HerdrError: Error,
+        run: (args) => {
+          calls.push(args);
+          return replies.shift() ?? { ok: true, result: {} };
+        },
+      },
+    }, "try {\n  main();");
+    launcher.context.sleep = (ms) => slept.push(ms);
+    let error = null;
+    try {
+      launcher.evaluate('deliverPrompt("w1:p1", "gemini", "fix it")');
+    } catch (caught) {
+      error = caught;
+    }
+    return { calls, slept, error };
+  };
+
+  const landed = deliver([]);
+  assert.equal(landed.error, null);
+  assert.deepEqual(landed.calls.map((args) => args.join(" ")),
+    ["agent prompt w1:p1 fix it --wait --until working --until blocked --timeout 6000"]);
+  assert.ok(landed.slept.reduce((a, b) => a + b, 0) <= 300, "one short settle, not fixed waits around the prompt");
+
+  const stalled = { ok: false, code: "agent_prompt_stalled", message: "agent never started working" };
+  const retried = deliver([stalled]);
+  assert.equal(retried.error, null);
+  assert.equal(retried.calls.length, 2);
+
+  assert.match(deliver([stalled, stalled, stalled]).error.message, /gemini did not accept the prompt/);
+  const refused = deliver([{ ok: false, code: "agent_blocked", message: "agent is blocked" }]);
+  assert.match(refused.error.message, /could not send the prompt to gemini: agent is blocked/);
+  assert.equal(refused.calls.length, 1);
+});
+
 test("a launch argument Herdr cannot encode is not retried", () => {
   let calls = 0;
   const launcher = load("bin/launch.js", {
@@ -654,6 +722,39 @@ test("directory arrows override typed parent, while direct Enter uses the typed 
   assert.equal(ui.evaluate("state.overlay.selectionMoved"), false);
 });
 
+test("the directory list is read once per edit, not once per key or frame", () => {
+  const listed = [];
+  const ui = picker(null, { dirs: {
+    suggestions: () => { listed.push("suggestions"); return ["/tmp", "/tmp/a", "/tmp/b"]; },
+    complete: (text) => { listed.push(`complete ${text}`); return ["/usr/bin"]; },
+  } });
+  ui.evaluate("openDirectories()");
+  ui.evaluate("dirsBody(71, 16); onDirsKey('', {name: 'down'}); dirsBody(71, 16); onDirsKey('', {name: 'down'}); dirsBody(71, 16)");
+  assert.deepEqual(listed, ["suggestions"]);
+  ui.evaluate("onDirsKey('a', {name: 'a'}); dirsBody(71, 16); onDirsKey('', {name: 'up'}); dirsBody(71, 16)");
+  assert.deepEqual(listed, ["suggestions"], "filtering reuses the suggestions it already has");
+  assert.deepEqual([...ui.evaluate("directoryEntries()")], ["/tmp/a"]);
+  ui.evaluate("onDirsKey('', {ctrl: true, name: 'u'}); onDirsKey('/', {name: '/'}); dirsBody(71, 16); onDirsKey('', {name: 'down'})");
+  assert.deepEqual(listed, ["suggestions", "complete /"]);
+});
+
+test("directory suggestions only check the remembered directories, not every neighbour", () => {
+  const root = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-dirs-"));
+  scratch.push(root);
+  for (const name of ["here", "other", "third", ".hidden"]) fs.mkdirSync(path.join(root, name));
+  fs.writeFileSync(path.join(root, "file.txt"), "");
+  const statted = [];
+  const realFs = require("node:fs");
+  const dirs = load("lib/dirs.js", {
+    "node:fs": { ...realFs, statSync: (target) => { statted.push(target); return realFs.statSync(target); } },
+  }).context.module.exports;
+  const here = path.join(root, "here");
+  const gone = path.join(root, "gone");
+  assert.deepEqual([...dirs.suggestions(here, [gone, path.join(root, "third")])],
+    [here, path.join(root, "third"), path.join(root, "other")]);
+  assert.deepEqual(statted, [here, gone, path.join(root, "third")]);
+});
+
 test("setup detects both TOML quote styles and treats punctuation literally", () => {
   for (const key of ["prefix+shift+c", "prefix+.", "prefix+["]) {
     for (const quote of ['"', "'"]) {
@@ -780,7 +881,7 @@ test("up and down recall history only past the top and bottom of the prompt", ()
 test("launching records the prompt in history", () => {
   const recorded = [];
   const ui = load("bin/picker.js", {
-    "../lib/agents": { catalog: () => [{ kind: "claude", installed: true }] },
+    "../lib/agents": { cachedCatalog: () => null, catalog: () => [{ kind: "claude", installed: true }] },
     "../lib/state": {
       STATE_DIR: path.join(require("node:os").tmpdir(), "qp-unused"),
       readPrefs: () => ({ recents: [], directories: [] }),
@@ -879,7 +980,7 @@ test("a lone esc acts at once and is kept from readline, so the next key survive
   assert.equal(ui.context.onData(Buffer.from("\x1b[A")), false, "an escape sequence still goes to readline");
 });
 
-test("opening the popup prunes old attachments once it has painted", () => {
+test("opening the popup prunes old attachments and checks the agents once it has painted", async () => {
   const { dir, api } = stateIn("qp-boot-test-");
   const attachments = path.join(dir, "attachments");
   fs.mkdirSync(attachments);
@@ -894,9 +995,18 @@ test("opening the popup prunes old attachments once it has painted", () => {
   const realRequire = createRequire(file);
   const mocks = {
     "../lib/state": api,
-    "../lib/agents": { catalog: () => [{ kind: "claude", installed: true }], runningAgent: () => null },
+    "../lib/agents": {
+      cachedCatalog: () => [{ kind: "claude", installed: true }],
+      catalog: () => assert.fail("a usable cache is painted from"),
+      refreshCatalog: async () => {
+        refreshed += 1;
+        return [{ kind: "claude", installed: true }, { kind: "codex", installed: true }];
+      },
+      runningAgent: async () => assert.fail("only the duplicate action asks for the running agent"),
+    },
     "../lib/herdr": { spawnDetached() {}, notify() {} },
   };
+  let refreshed = 0;
   const later = [];
   const painted = [];
   const tty = { isTTY: true, on() {}, setRawMode() {}, resume() {} };
@@ -911,9 +1021,16 @@ test("opening the popup prunes old attachments once it has painted", () => {
   vm.runInContext(fs.readFileSync(file, "utf8"), context);
   assert.ok(painted.length > 0);
   assert.equal(fs.existsSync(old), true, "nothing slows the first paint");
-  later.forEach((fn) => fn());
+  assert.equal(refreshed, 0);
+  const frames = painted.length;
+  later.splice(0).forEach((fn) => fn());
   assert.equal(fs.existsSync(old), false);
   assert.equal(fs.existsSync(fresh), true);
+  assert.equal(refreshed, 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  later.splice(0).forEach((fn) => fn());
+  assert.equal(painted.length, frames + 1, "a catalog that changed is repainted");
+  assert.match(painted.at(-1), /codex/);
 });
 
 test("kitty protocol keys come back as the legacy bytes readline knows", () => {
@@ -1081,29 +1198,152 @@ test("the agent in a pane is matched by pane id and reports its foreground direc
 test("the popup's own calls to herdr and git are bounded", () => {
   const options = [];
   const spawnSync = (_, args, opts) => { options.push(opts); return { status: null, stdout: "", error: new Error("ETIMEDOUT") }; };
-  const agents = load("lib/agents.js", { "node:child_process": { spawnSync }, "./herdr": { BIN: "herdr", run() {} } }).context.module.exports;
-  assert.ok(agents.kinds().includes("claude"), "a silent herdr leaves the built-in list");
+  const written = [];
+  const agents = load("lib/agents.js", {
+    "node:child_process": { spawnSync },
+    "./herdr": { BIN: "/usr/bin/herdr", runAsync() {} },
+    "./executables": { pathDirs: () => [], executablesOnPath: () => new Set() },
+    "./state": { readCache: () => null, writeCache: (...args) => written.push(args) },
+  }).context.module.exports;
+  assert.ok(agents.catalog().some((item) => item.kind === "claude"), "a silent herdr leaves the built-in list");
+  assert.deepEqual(written, [], "and that list is not kept for the next popup");
   const worktree = load("lib/worktree.js", { "node:child_process": { spawnSync } }).context.module.exports;
   assert.equal(worktree.insideRepo("/repo"), false);
   assert.equal(options.length, 2);
   assert.ok(options.every((opts) => opts.timeout > 0));
 });
 
-test("looking up the running agent is bounded and gives up quietly", () => {
+test("the agent catalog is kept until Herdr or PATH changes, and a fresh look replaces it", async () => {
+  const root = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-catalog-"));
+  scratch.push(root);
+  const bin = path.join(root, "herdr");
+  const tools = path.join(root, "bin");
+  fs.mkdirSync(tools);
+  fs.writeFileSync(bin, "v1");
+  fs.writeFileSync(path.join(tools, "codex"), "");
+  const help = "--kind <KIND>  [possible values: claude, codex, gemini]";
+  const cache = {};
+  let spawned = 0;
+  const open = (PATH) => load("lib/agents.js", {
+    "./executables": load("lib/executables.js", {}, null, { PATH }).context.module.exports,
+    "./herdr": { BIN: bin, runAsync() {} },
+    "./state": { readCache: (name) => cache[name] ?? null, writeCache: (name, value) => { cache[name] = JSON.parse(JSON.stringify(value)); } },
+    "node:child_process": {
+      spawnSync: () => { spawned += 1; return { status: 0, stdout: help }; },
+      execFile: (_, __, ___, done) => { spawned += 1; done(null, help); },
+    },
+  }, null, { PATH }).context.module.exports;
+  const PATH = `${tools}:${tools}:/nonexistent`;
+  const installed = (items) => [...items].filter((item) => item.installed).map((item) => item.kind);
+
+  assert.equal(open(PATH).cachedCatalog(), null, "nothing to paint from on the first run");
+  assert.deepEqual(installed(open(PATH).catalog()), ["codex"]);
+  assert.deepEqual(installed(open(PATH).cachedCatalog()), ["codex"]);
+
+  spawned = 0;
+  open(PATH).cachedCatalog();
+  assert.equal(spawned, 0, "a cache hit asks Herdr nothing");
+  assert.equal(open(`${tools}:/elsewhere`).cachedCatalog(), null, "PATH changed");
+  fs.writeFileSync(bin, "version two");
+  assert.equal(open(PATH).cachedCatalog(), null, "Herdr was replaced");
+
+  fs.writeFileSync(path.join(tools, "gemini"), "");
+  const agents = open(PATH);
+  assert.deepEqual(installed(await agents.refreshCatalog()), ["codex", "gemini"]);
+  assert.deepEqual(installed(agents.cachedCatalog()), ["codex", "gemini"], "the fresh look is kept for next time");
+});
+
+test("PATH is swept once per directory however often it repeats", () => {
+  const read = [];
+  const executables = load("lib/executables.js", {
+    "node:fs": { readdirSync: (dir) => { read.push(dir); return dir === "/w" ? ["powershell.exe", "wsl.exe"] : ["codex"]; } },
+  }, null, { PATH: "/a:/w:/a::/w" }).context.module.exports;
+  assert.equal(executables.onPath("codex"), null, "unknown before a sweep");
+  const found = executables.executablesOnPath();
+  assert.deepEqual(read, ["/a", "/w"]);
+  assert.deepEqual([...found].sort(), ["codex", "powershell", "wsl"]);
+  assert.equal(executables.onPath("powershell.exe"), true);
+  assert.equal(executables.onPath("xclip"), false);
+});
+
+test("Scratchpad is found from the catalog's PATH sweep, or by its one name before there is one", () => {
+  const looked = [];
+  const scratchpadWith = (onPath) => load("lib/scratchpad.js", {
+    "./executables": { pathDirs: () => ["/a", "/b"], onPath: () => onPath },
+    "node:fs": { existsSync: (file) => { looked.push(file); return file === path.join("/b", "scratch"); } },
+  }).context.module.exports;
+  assert.equal(scratchpadWith(false).available(), false);
+  assert.equal(scratchpadWith(true).available(), true);
+  assert.deepEqual(looked, [], "a sweep already knows");
+  assert.equal(scratchpadWith(null).available(), true);
+  assert.deepEqual(looked, [path.join("/a", "scratch"), path.join("/b", "scratch")]);
+});
+
+test("ctrl+v tries the reader that worked last, Windows' first under bare WSL, and none not on PATH", async () => {
+  const cache = {};
+  const tried = [];
+  const clipboard = (PATH, env, working) => load("lib/clipboard.js", {
+    "./executables": { onPath: (command) => (PATH ? PATH.includes(command) : null) },
+    "./state": { readCache: (name) => cache[name] ?? null, writeCache: (name, value) => { cache[name] = value; } },
+    "node:child_process": {
+      execFile: (command, _, __, done) => {
+        tried.push(command);
+        if (command === working) done(null, "copied\r\n");
+        else done(Object.assign(new Error(`spawn ${command} ENOENT`), { code: "ENOENT" }));
+        return { stdin: { end() {} } };
+      },
+    },
+  }, null, env).context.module.exports;
+  const order = (PATH, env, remembered) => [...clipboard(PATH, env).readers(env, remembered)].map((reader) => reader.command);
+
+  const desktop = { WAYLAND_DISPLAY: "wayland-0" };
+  const wsl = { WSL_DISTRO_NAME: "Ubuntu" };
+  assert.deepEqual(order(null, desktop), ["wl-paste", "xclip", "xsel", "pbpaste", "powershell.exe"]);
+  assert.deepEqual(order(null, wsl)[0], "powershell.exe");
+  assert.deepEqual(order(null, { ...wsl, DISPLAY: ":0" })[0], "wl-paste", "WSLg has a clipboard of its own");
+  assert.deepEqual(order(["xclip", "powershell.exe"], desktop), ["xclip", "powershell.exe"]);
+  assert.deepEqual(order(null, desktop, "xsel")[0], "xsel");
+
+  const reader = clipboard(null, desktop, "powershell.exe");
+  assert.equal(await reader.readClipboard(), "copied");
+  assert.deepEqual(tried, ["wl-paste", "xclip", "xsel", "pbpaste", "powershell.exe"]);
+  assert.deepEqual({ ...cache.clipboard }, { command: "powershell.exe" });
+  tried.length = 0;
+  assert.equal(await clipboard(null, desktop, "powershell.exe").readClipboard(), "copied");
+  assert.deepEqual(tried, ["powershell.exe"], "the next popup goes straight to it");
+  tried.length = 0;
+  assert.equal(await clipboard([], desktop, "xclip").readClipboard(), null);
+  assert.deepEqual(tried, [], "nothing on PATH, nothing spawned");
+});
+
+test("ctrl+v says it is pasting without freezing, and pastes at the cursor as it is then", async () => {
+  let deliver;
+  const ui = picker(null, { clipboard: () => new Promise((resolve) => { deliver = resolve; }) });
+  ui.evaluate("state.prompt = new Editor('ab')");
+  const pasted = ui.evaluate("onKey('\\x16', {ctrl: true, name: 'v'})");
+  assert.equal(ui.evaluate("state.notice"), "pasting…");
+  ui.evaluate("onKey('', {name: 'left'})");
+  deliver("XY");
+  await pasted;
+  assert.equal(ui.evaluate("state.prompt.text"), "aXYb");
+  assert.equal(ui.evaluate("state.notice"), null);
+});
+
+test("looking up the running agent is bounded and gives up quietly", async () => {
   const calls = [];
   const lookup = (reply) => load("lib/agents.js", {
-    "./herdr": { BIN: "herdr", run: (args, options) => { calls.push({ args, options }); return reply; } },
+    "./herdr": { BIN: "herdr", runAsync: async (args, options) => { calls.push({ args, options }); return reply; } },
   }).context.module.exports.runningAgent;
 
-  const found = lookup({ ok: true, result: { agents: [{ agent: "pi", pane_id: "w1:p2", foreground_cwd: "/src" }] } });
-  assert.deepEqual({ ...found("w1:p2") }, { kind: "pi", cwd: "/src" });
+  const found = await lookup({ ok: true, result: { agents: [{ agent: "pi", pane_id: "w1:p2", foreground_cwd: "/src" }] } })("w1:p2");
+  assert.deepEqual({ ...found }, { kind: "pi", cwd: "/src" });
   assert.deepEqual([...calls[0].args], ["agent", "list"]);
   assert.ok(calls[0].options.timeout > 0, "a hung Herdr must not hold the popup open");
 
-  assert.equal(lookup({ ok: false, message: "spawnSync herdr ETIMEDOUT" })("w1:p2"), null);
-  assert.equal(lookup({ ok: true, result: {} })("w1:p2"), null);
+  assert.equal(await lookup({ ok: false, message: "herdr ETIMEDOUT" })("w1:p2"), null);
+  assert.equal(await lookup({ ok: true, result: {} })("w1:p2"), null);
   calls.length = 0;
-  assert.equal(lookup({ ok: true, result: {} })(undefined), null);
+  assert.equal(await lookup({ ok: true, result: {} })(undefined), null);
   assert.equal(calls.length, 0, "no origin pane means nothing to ask");
 });
 
@@ -1185,22 +1425,41 @@ test("ctrl+s explains itself when it cannot save, and keeps the prompt", () => {
   assert.match(handedOver.evaluate("state.notice"), /already a note/);
 });
 
-test("duplicate selects the focused pane's agent and directory over recency and a draft", () => {
+test("duplicate selects the focused pane's agent and directory over recency and a draft", async () => {
   const ui = picker(null, { running: { kind: "codex", cwd: "/work/tree" }, recents: ["gemini"] });
+  assert.equal(ui.evaluate("agent().kind"), "gemini", "the first paint does not wait for Herdr");
+  await ui.evaluate("lookUpDuplicate()");
   assert.equal(ui.evaluate("agent().kind"), "codex");
   assert.equal(ui.evaluate("state.cwd"), "/work/tree");
 
   const draft = { kind: "amp", prompt: "x", cwd: "/old" };
   const withDraft = picker(draft, { running: { kind: "cursor", cwd: "/work/tree" } });
+  await withDraft.evaluate("lookUpDuplicate()");
   assert.equal(withDraft.evaluate("agent().kind"), "cursor");
   assert.equal(withDraft.evaluate("state.cwd"), "/work/tree");
   assert.equal(withDraft.evaluate("state.prompt.text"), "x", "the draft's prompt is still restored");
 
   const unknown = picker(null, { running: { kind: "someday", cwd: null }, recents: ["gemini"] });
+  await unknown.evaluate("lookUpDuplicate()");
   assert.equal(unknown.evaluate("agent().kind"), "gemini", "a kind the catalog lacks falls back to recency");
   assert.equal(unknown.evaluate("state.cwd"), "/tmp");
 
-  assert.equal(picker(null, { recents: ["gemini"] }).evaluate("agent().kind"), "gemini");
+  const changed = picker(null, { running: { kind: "codex", cwd: "/work/tree" }, recents: ["gemini"] });
+  const pending = changed.evaluate("lookUpDuplicate()");
+  changed.evaluate("cycleAgent(1)");
+  await pending;
+  assert.equal(changed.evaluate("agent().kind"), "claude", "a choice made while Herdr answered stands");
+  assert.equal(changed.evaluate("state.cwd"), "/tmp");
+});
+
+test("the popup paints from the cached catalog and repaints only if a fresh one differs", () => {
+  const ui = picker(null, { installed: ["claude", "codex"], recents: ["codex"] });
+  const same = ui.evaluate("agents").map((item) => ({ ...item }));
+  assert.equal(ui.evaluate("useCatalog")(same), false);
+  const fresh = [{ kind: "amp", installed: true }, ...same.map((item) => ({ ...item }))];
+  assert.equal(ui.evaluate("useCatalog")(fresh), true);
+  assert.equal(ui.evaluate("agent().kind"), "codex", "the selected agent stays selected");
+  assert.match(ui.evaluate("chipRow(71)").replace(/\x1b\[[0-9;]*m/g, ""), /1 amp +2 claude +3 codex/);
 });
 
 const LISTED = [

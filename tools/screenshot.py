@@ -98,7 +98,7 @@ def capture(keys, state_dir, home):
         pass
 
     text = buf.decode("utf8", "replace")
-    screen = text.split("\x1b[2J\x1b[H")[-1]
+    screen = text.split("\x1b[H")[-1]
     at = CURSOR_AT.findall(screen)
     cursor = (int(at[-1][0]) - 1, int(at[-1][1]) - 1) if at else None
     return screen, cursor
