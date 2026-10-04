@@ -44,7 +44,7 @@ testing the published copy.
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/running.js` | The running agents behind `ctrl+r`, waiting ones first |
 | `lib/worktree.js` | Branch names for the worktree destination, and the git repository check |
-| `lib/state.js` | Preferences, prompt history, launch requests and the draft under `HERDR_PLUGIN_STATE_DIR` |
+| `lib/state.js` | Preferences, prompt history, launch requests and drafts under `HERDR_PLUGIN_STATE_DIR` |
 | `lib/scratchpad.js` | Saving a prompt as a Scratchpad note for `ctrl+s` |
 | `lib/presets.js` | Reading `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
 
@@ -61,13 +61,15 @@ directory the user invoked from travels as `QUICK_PROMPT_CWD` instead.
 
 **A popup's output goes nowhere.** Pane commands do not appear in
 `herdr plugin log list`, so a crash is just a window that blinks once. Uncaught
-errors are appended to `crash.log` in the state directory — check there first.
+errors, and bugs in the detached launcher, are appended to `crash.log` in the
+state directory — check there first.
 
 **A lone ESC byte is the Escape key.** Readline cannot tell `esc` from the start
 of an arrow key, so it waits 500ms before deciding — which is a very long time to
 watch a modal you just cancelled. Terminals send real escape sequences in one
-write, so a one-byte read containing `\x1b` is acted on immediately, and the
-keypress readline emits half a second later is dropped.
+write, so a one-byte read containing `\x1b` is acted on immediately and never
+reaches readline. Passed on, readline would read it together with the next key
+as alt+that key, and the key would be lost.
 
 **Herdr owns the popup's frame and size.** It draws the border and title, and
 hands the process fewer rows and columns than the manifest declares — three
