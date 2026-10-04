@@ -8,7 +8,6 @@
 
 const readline = require("node:readline");
 const path = require("node:path");
-const fs = require("node:fs");
 const { PassThrough } = require("node:stream");
 const { StringDecoder } = require("node:string_decoder");
 
@@ -16,11 +15,11 @@ const { catalog, runningAgent } = require("../lib/agents");
 const { Editor } = require("../lib/editor");
 const { History } = require("../lib/history");
 const { spawnDetached, notify } = require("../lib/herdr");
-const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft } = require("../lib/state");
+const { STATE_DIR, readPrefs, remember, readHistory, recordPrompt, writeRequest, sweepStaleRequests, readDraft, saveDraft, clearDraft, logCrash } = require("../lib/state");
 const { style, pad, truncate, shortenPath, displayWidth } = require("../lib/ui");
 const { sanitizePasted } = require("../lib/text");
 const { readClipboard } = require("../lib/clipboard");
-const { stage } = require("../lib/dropped");
+const { stage, prune } = require("../lib/dropped");
 const { KITTY_ON, KITTY_OFF, legacyKeys } = require("../lib/keys");
 const { complete, expand, isDirectory, suggestions } = require("../lib/dirs");
 const { modelsFor, effortsFor, normalize, modelLabel } = require("../lib/models");
@@ -40,8 +39,6 @@ const DESTINATIONS = [
   { id: "worktree", label: "new worktree" },
 ];
 
-// Enough chips to be useful on a machine with nothing installed yet.
-const MIN_CHIPS = 5;
 const SHORTCUTS = 9;
 
 function context() {
@@ -62,14 +59,16 @@ const agents = catalog();
 const { presets, problems: presetProblems } = readPresets();
 sweepStaleRequests();
 // Another plugin can open the picker with the prompt already written, as
-// Scratchpad does with notes. A handed-over prompt never touches the draft:
+// Scratchpad does with notes. A handed-over prompt never touches the drafts:
 // it did not come from this box, and the one you left here stays for later.
 const handoff = process.env.QUICK_PROMPT_TEXT || null;
-const draft = handoff ? null : readDraft();
+const { draft = null, file: openedDraft = null } = (handoff ? null : readDraft()) ?? {};
 // A handed-over prompt from Scratchpad is already a note there.
 const canSaveNote = !handoff && scratchpad.available();
-// Cleared once the draft has been thrown away, so the notice says so only once.
-let restored = Boolean(draft);
+// The draft file this popup opened, and the only one it may replace or clear:
+// a launch that fails while it is open leaves a draft of its own. Null once
+// thrown away, so the notice says so only once, and always null for a handoff.
+let draftFile = openedDraft;
 // The duplicate action starts from the agent in the pane you came from, which
 // is a deliberate ask, so it outranks both a restored draft and recency.
 const duplicate = process.env.QUICK_PROMPT_DUPLICATE ? runningAgent(originPane) : null;
@@ -84,8 +83,6 @@ const ESC = 0x1b;
 const paste = { active: false, text: "" };
 let burst = "";
 let swallow = false;
-// Escapes already acted on, waiting for readline to emit them late.
-let pendingEscapes = 0;
 
 // The first of these that is a kind Herdr knows starts selected.
 function initialAgent(...wanted) {
@@ -93,24 +90,43 @@ function initialAgent(...wanted) {
     const at = agents.findIndex((a) => a.kind === kind);
     if (at >= 0) return at;
   }
-  return 0;
+  return Math.max(0, agents.findIndex((a) => a.installed));
 }
+
+// The kind Enter was refused for, so that Enter again launches it anyway.
+let launchAnyway = null;
+
+// A failed follow-up's draft has no model and no destination of its own, so
+// those come from preferences rather than resetting them.
+const draftDestination = DESTINATIONS.some((d) => d.id === draft?.destination) ? draft.destination : null;
+const draftModel = draft && (draft.model !== undefined || draft.effort !== undefined);
 
 const state = {
   // Recency decides which chip starts selected; it never moves the chips.
   agent: initialAgent(duplicate?.kind, draft?.kind, prefs.recents[0]),
-  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draft?.destination ?? prefs.destination))),
+  destination: Math.max(0, DESTINATIONS.findIndex((d) => d.id === (draftDestination ?? prefs.destination))),
   prompt: new Editor(handoff ?? draft?.prompt ?? ""),
   history: new History(readHistory()),
   cwd: duplicate?.cwd ?? draft?.cwd ?? cwd, // where the agent will be started; ctrl+d changes it
   preset: draft?.preset ?? null,
   followUp: draft?.followUp ?? null, // the running agent Enter sends to, instead of launching
-  models: draft ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
+  models: draftModel ? { ...prefs.models, [draft.kind]: draft } : { ...prefs.models },
   overlay: null, // { type: "agents" | "dirs" | "presets" | "model" | "running", ... } while a picker is open
   notice: handoff ? `From ${process.env.QUICK_PROMPT_SOURCE || "another plugin"} · ⏎ launch · ctrl+r follow up instead`
     : draft?.failed ? `Recovered failed ${draft.followUp ? "follow-up" : "launch"} · edit or Enter to retry · ctrl+u clear`
     : draft ? "Restored draft · ctrl+u clear" : null,
 };
+
+// A restored follow-up names a pane that may have closed since, or now runs
+// another agent. When Herdr cannot say, keep it: the worker will find out.
+if (state.followUp) {
+  const live = runningAgents();
+  const { target, kind, title } = state.followUp;
+  if (live && !live.some((entry) => entry.target === target && entry.kind === kind)) {
+    state.followUp = null;
+    state.notice = `${truncate(title, 24)} is no longer running · ⏎ launches a new ${kind}`;
+  }
+}
 
 // Every cell inside the popup has to be written: cells this never paints show
 // whatever was on the screen behind it.
@@ -125,8 +141,10 @@ const choice = () => (modelsFor(agent().kind) ? normalize(agent().kind, state.mo
 
 // The chip row is the agents you actually have, plus whatever is selected. The
 // other twenty kinds Herdr knows about are noise until you go looking (ctrl+k).
-const installedChips = agents.filter((item) => item.installed);
-const chips = installedChips.length >= MIN_CHIPS ? installedChips : agents.slice(0, MIN_CHIPS);
+const chips = agents.filter((item) => item.installed);
+const noneInstalled = chips.length === 0;
+// Marks a kind that is not on PATH wherever one can be picked.
+const missing = (kind) => (agents.find((item) => item.kind === kind)?.installed === false ? " ○" : "");
 function chipAgents() {
   if (!chips.includes(agent())) chips.push(agent());
   return chips;
@@ -181,9 +199,9 @@ function mainBody(inner, rows) {
 
 function chipRow(inner) {
   const chips = chipAgents();
-  const label = (item, index) => (index < SHORTCUTS ? `${index + 1} ${item.kind}` : item.kind);
+  const label = (item, index) => `${index < SHORTCUTS ? `${index + 1} ` : ""}${item.kind}${missing(item.kind)}`;
 
-  const hint = `ctrl+k`;
+  const hint = noneInstalled ? "no agent found on PATH · ctrl+k" : "ctrl+k";
   const room = inner - hint.length - 6;
 
   const shown = [];
@@ -212,12 +230,13 @@ function chipRow(inner) {
       const text = label(item, i);
       if (item === agent()) return style.selected(` ${text} `);
       const number = i < SHORTCUTS ? style.dim(`${i + 1} `) : "";
-      return ` ${number}${item.kind} `;
+      const mark = missing(item.kind) && style.dim(missing(item.kind));
+      return ` ${number}${item.kind}${mark} `;
     })
     .join(" ");
 
   const hidden = agents.length - shown.length;
-  const tail = style.dim(hidden > 0 ? `+${hidden} ${hint}` : hint);
+  const tail = noneInstalled ? style.warn(hint) : style.dim(hidden > 0 ? `+${hidden} ${hint}` : hint);
   const gap = Math.max(1, inner - displayWidth(row) - displayWidth(tail));
   return row + " ".repeat(gap) + tail;
 }
@@ -281,7 +300,8 @@ function followUpWhere(inner) {
 }
 
 function openRunning() {
-  state.overlay = { type: "running", filter: "", index: 0, agents: runningAgents() };
+  const listed = runningAgents();
+  state.overlay = { type: "running", filter: "", index: 0, agents: listed ?? [], unanswered: !listed };
 }
 
 function runningMatches() {
@@ -297,7 +317,8 @@ function runningBody(inner, rows) {
     : style.dim("running agent");
 
   if (list.length === 0) {
-    lines[1] = style.warn(state.overlay.agents.length ? "no running agent matches that filter" : "no agents are running");
+    lines[1] = style.warn(state.overlay.unanswered ? "herdr did not answer · esc and try again"
+      : state.overlay.agents.length ? "no running agent matches that filter" : "no agents are running");
     lines[rows - 1] = style.dim("esc back");
     return { lines, caret: null };
   }
@@ -309,15 +330,20 @@ function runningBody(inner, rows) {
   list.slice(start, start + room).forEach((entry, index) => {
     const detail = `${entry.kind} · ${entry.status} · ${shortenPath(entry.cwd, 20)} `;
     const name = pad(truncate(` ${entry.title}`, inner - displayWidth(detail) - 2), inner - displayWidth(detail));
-    lines[1 + index] = start + index === active ? style.selected(name + detail) : name + style.dim(detail);
+    const plain = entry.status === "blocked" ? style.warn(detail) : style.dim(detail);
+    lines[1 + index] = start + index === active ? style.selected(name + detail) : name + plain;
   });
 
-  lines[rows - 1] = style.dim("↑↓ select · type to filter · ⏎ follow up · esc back");
+  lines[rows - 1] = state.overlay.error
+    ? style.warn(state.overlay.error)
+    : style.dim("↑↓ select · type to filter · ⏎ follow up · esc back");
   return { lines, caret: null };
 }
 
 function onRunningKey(chunk, key) {
   const list = runningMatches();
+  const highlighted = list[Math.min(state.overlay.index, list.length - 1)];
+  state.overlay.error = null;
 
   switch (true) {
     case key.name === "escape" || (key.ctrl && key.name === "r"):
@@ -329,12 +355,15 @@ function onRunningKey(chunk, key) {
     case key.name === "down" || (key.ctrl && key.name === "n"):
       state.overlay.index = Math.min(list.length - 1, state.overlay.index + 1);
       break;
-    case key.name === "return" || key.name === "enter": {
-      const chosen = list[Math.min(state.overlay.index, list.length - 1)];
-      if (chosen) state.followUp = chosen;
+    // Herdr refuses a prompt to a blocked agent, so it would only come back as
+    // a failed draft.
+    case (key.name === "return" || key.name === "enter") && highlighted?.status === "blocked":
+      state.overlay.error = `${truncate(highlighted.title, 30)} is blocked · answer it in its pane first`;
+      break;
+    case key.name === "return" || key.name === "enter":
+      if (highlighted) state.followUp = highlighted;
       state.overlay = null;
       break;
-    }
     case key.name === "backspace":
       state.overlay.filter = state.overlay.filter.slice(0, -1);
       state.overlay.index = 0;
@@ -502,7 +531,7 @@ function presetsBody(inner, rows) {
   list.slice(start, start + room).forEach((item, index) => {
     const at = start + index;
     const name = pad(truncate(item.name, nameWidth), nameWidth);
-    const detail = style.dim(pad(truncate([item.agent, item.task === "skip" ? "skip" : null]
+    const detail = style.dim(pad(truncate([item.agent && `${item.agent}${missing(item.agent)}`, item.task === "skip" ? "skip" : null]
       .filter(Boolean).join(" · "), detailWidth), detailWidth));
     const mark = item.name === state.preset?.name ? style.ok("●") : " ";
     lines[1 + index] = at === active
@@ -520,13 +549,16 @@ function openPresets() {
 }
 
 // Choosing the preset already applied takes it off again. A skip preset over an
-// empty prompt has nothing left to ask for, so it launches straight away.
+// empty prompt has nothing left to ask for, so it launches straight away. In a
+// follow-up only the text applies: the agent is already chosen, and sending
+// stays a deliberate Enter.
 function applyPreset(preset) {
   if (state.preset?.name === preset.name) {
     state.preset = null;
     return;
   }
   state.preset = preset;
+  if (state.followUp) return;
   if (preset.agent) {
     const index = agents.findIndex((item) => item.kind === preset.agent);
     if (index < 0) {
@@ -700,11 +732,6 @@ function onKey(chunk, key = {}) {
   }
   // Keypresses belonging to a burst this already handled as pasted text.
   if (swallow) return;
-  // The late half of an escape already acted on above.
-  if (key.name === "escape" && pendingEscapes > 0) {
-    pendingEscapes -= 1;
-    return;
-  }
 
   if (key.ctrl && key.name === "c") return quit(0);
   if (key.ctrl && key.name === "v") {
@@ -716,22 +743,23 @@ function onKey(chunk, key = {}) {
 }
 
 // Runs before the keypress events for the same chunk, so it can claim a burst
-// the terminal did not mark as a paste.
+// the terminal did not mark as a paste. Returns true when it has dealt with the
+// chunk and readline must not see it.
 function onData(chunk) {
-  if (paste.active || swallow) return;
+  if (paste.active || swallow) return false;
 
   // A lone ESC byte in its own read is the Escape key. Terminals send real
   // escape sequences in a single write, so there is nothing more coming — but
   // readline cannot know that and waits 500ms before giving up on a sequence,
   // which is a very long time to watch a modal sit there after you cancelled it.
+  // Handed to readline anyway, it would swallow the next key as alt+key.
   if (chunk.length === 1 && chunk[0] === ESC) {
-    pendingEscapes += 1;
     onEscape();
-    return;
+    return true;
   }
 
-  if (chunk[0] === ESC) return; // an escape sequence, however long, is not a paste
-  if (chunk.length <= BURST_BYTES) return;
+  if (chunk[0] === ESC) return false; // an escape sequence, however long, is not a paste
+  if (chunk.length <= BURST_BYTES) return false;
 
   burst = chunk.toString("utf8");
   swallow = true;
@@ -743,6 +771,7 @@ function onData(chunk) {
     insertPasted(text);
     render();
   });
+  return false;
 }
 
 // Reading the clipboard can block for a second on WSL, so say what is happening
@@ -777,6 +806,7 @@ function onEscape() {
 function back() {
   if (!state.followUp) return close();
   state.followUp = null;
+  state.notice = null;
   scheduleRender();
 }
 
@@ -810,6 +840,8 @@ function cycleAgent(step) {
 function onMainKey(chunk, key) {
   const prompt = state.prompt;
   state.notice = null;
+  const anyway = launchAnyway;
+  launchAnyway = null;
 
   switch (true) {
     // Up and down walk the prompt's own lines first and history only past its
@@ -830,7 +862,7 @@ function onMainKey(chunk, key) {
       break;
     // A backslash before Enter asks for a newline instead, as in Claude Code.
     case chunk === "\r" || key.name === "return":
-      if (prompt.cells[prompt.cursor - 1] !== "\\") return launch();
+      if (prompt.cells[prompt.cursor - 1] !== "\\") return launch(anyway);
       prompt.backspace();
       prompt.insert("\n");
       break;
@@ -870,9 +902,12 @@ function onMainKey(chunk, key) {
       prompt.clear();
       // The draft notice offers this as the way to be rid of the draft, so it
       // has to actually throw it away rather than just empty the buffer.
-      if (restored) {
-        clearDraft();
-        restored = false;
+      if (draftFile) {
+        clearDraft(draftFile);
+        draftFile = null;
+        // What the draft brought along goes with it; a choice made since stays.
+        if (state.followUp === draft.followUp) state.followUp = null;
+        if (state.preset === draft.preset) state.preset = null;
         state.notice = "draft discarded";
       }
       break;
@@ -1008,11 +1043,19 @@ const OVERLAYS = {
 
 /* ---------- launch ---------- */
 
-function launch() {
+function launch(anyway = null) {
   if (state.followUp) return sendFollowUp();
 
   const chosen = agent();
   if (!chosen) return quit(0);
+
+  // The popup only sees its own PATH, and a pane's shell can add to it, so a
+  // second Enter launches anyway.
+  if (!chosen.installed && anyway !== chosen.kind) {
+    state.notice = `${chosen.kind} is not on PATH · ⏎ again to launch anyway · ctrl+k to pick another`;
+    launchAnyway = chosen.kind;
+    return scheduleRender();
+  }
 
   // The directory can change after the worktree was chosen, or a recovered
   // draft can bring one along.
@@ -1023,8 +1066,6 @@ function launch() {
 
   remember(chosen.kind, destination().id, state.cwd, choice());
   recordPrompt(state.prompt.text);
-  // Before the worker exists, so a failure it records is never wiped by this.
-  if (!handoff) clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind: chosen.kind,
@@ -1035,7 +1076,10 @@ function launch() {
     cwd: state.cwd,
     workspace,
     pane: originPane,
+    ...(handoff && { handoff: true }),
   });
+  // Only once the request holds the prompt.
+  clearDraft(draftFile);
 
   spawnDetached(process.execPath, [LAUNCHER, request]);
   quit(0);
@@ -1049,7 +1093,6 @@ function sendFollowUp() {
   }
   const { target, title, kind, cwd } = state.followUp;
   recordPrompt(state.prompt.text);
-  if (!handoff) clearDraft();
   const request = writeRequest({
     submittedAt: Date.now(),
     kind,
@@ -1057,7 +1100,9 @@ function sendFollowUp() {
     preset: state.preset,
     destination: "follow-up",
     followUp: { target, title, kind, cwd },
+    ...(handoff && { handoff: true }),
   });
+  clearDraft(draftFile);
   spawnDetached(process.execPath, [LAUNCHER, request]);
   quit(0);
 }
@@ -1077,7 +1122,7 @@ function saveNote() {
       state.notice = `not saved: ${saved.message}`;
     } else {
       recordPrompt(text);
-      clearDraft();
+      clearDraft(draftFile);
       notify("Quick Prompt", `Saved to Scratchpad: ${saved.message}`, "done");
       return quit(0);
     }
@@ -1085,15 +1130,18 @@ function saveNote() {
   scheduleRender();
 }
 
-// Closing keeps what you typed for next time; closing an empty box forgets it.
+// Closing keeps what you typed for next time, in place of the draft this
+// opened with; closing an empty box forgets that draft. A handed-over prompt
+// is never kept: it is still wherever it came from.
+function keepDraft() {
+  if (handoff) return;
+  if (!state.prompt.text.trim()) return clearDraft(draftFile);
+  saveDraft({ kind: agent().kind, ...choice(), prompt: state.prompt.text, preset: state.preset, followUp: state.followUp, destination: destination().id, cwd: state.cwd }, draftFile);
+}
+
 function close() {
-  if (handoff) return quit(0);
-  if (!state.prompt.text.trim()) {
-    clearDraft();
-    return quit(0);
-  }
   try {
-    saveDraft({ kind: agent().kind, ...choice(), prompt: state.prompt.text, preset: state.preset, followUp: state.followUp, destination: destination().id, cwd: state.cwd });
+    keepDraft();
   } catch { /* losing a draft is better than a modal that will not close */ }
   quit(0);
 }
@@ -1104,22 +1152,19 @@ function quit(code) {
   process.exit(code);
 }
 
-/* ---------- boot ---------- */
-
 // A popup that dies takes its output with it: pane commands are not in
 // `herdr plugin log list`, so a crash would otherwise be a window that blinks
-// once and vanishes. Leave a trail.
+// once and vanishes. Leave a trail, and keep what was typed.
 function reportCrash(error) {
-  const detail = error?.stack ?? String(error);
+  logCrash(error);
   try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.appendFileSync(path.join(STATE_DIR, "crash.log"), `${new Date().toISOString()}\n${detail}\n\n`);
-  } catch {
-    // Nothing more we can do from in here.
-  }
+    if (state.prompt.text.trim()) keepDraft();
+  } catch { /* the state that crashed may be what is broken */ }
   notify("Quick Prompt crashed", `${String(error).slice(0, 160)} — see crash.log in ${STATE_DIR}`);
   process.exit(1);
 }
+
+/* ---------- boot ---------- */
 
 process.on("uncaughtException", reportCrash);
 
@@ -1136,8 +1181,7 @@ const keys = new PassThrough();
 process.stdin.on("data", (raw) => {
   const chunk = Buffer.from(legacyKeys(decoder.write(raw)));
   if (!chunk.length) return;
-  onData(chunk);
-  keys.write(chunk);
+  if (!onData(chunk)) keys.write(chunk);
 });
 
 readline.emitKeypressEvents(keys);
@@ -1146,3 +1190,6 @@ process.stdin.setRawMode(true);
 process.stdin.resume();
 out.on("resize", render);
 render();
+// Copies are only pruned on a drop otherwise, and someone who stops dropping
+// screenshots would keep the last week's for ever. Not before the first paint.
+setImmediate(() => prune(ATTACHMENTS));

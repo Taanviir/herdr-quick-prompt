@@ -67,14 +67,18 @@ and end of the line.
 
 **Agents.** The numbered chips are the agents installed on this machine. Their
 order never changes, so `alt+2` always means the same agent. The last one you
-used starts selected. `ctrl+k` lists every kind Herdr supports:
+used starts selected. An agent that is not on your `PATH` is marked `○`, and
+Enter on one asks again before launching it. `ctrl+k` lists every kind Herdr
+supports:
 
 ![The full agent list, with installed agents marked](docs/quick-prompt-agents.png)
 
 **Destination.** `ctrl+t` picks where the agent opens. A new worktree gets a
-branch named after the first line of your prompt ("Fix the login bug" becomes
-`fix-the-login-bug`), or a random name if the prompt is empty. The worktree
-option only appears inside a git repository.
+branch named after the first line of your prompt, leaving out any paths ("Fix
+the login bug" becomes `fix-the-login-bug`), or a random name if the prompt is
+empty. The worktree option only appears inside a git repository. If the agent
+never starts, the tab, split or workspace made for it is closed again; a
+worktree is kept.
 
 **Directory.** `ctrl+d` lists the directory you are in, ones you launched into
 before, and neighbouring projects. Type to filter, or type a path starting with
@@ -87,7 +91,8 @@ remembers its own choice. The model lists live in `lib/models.js`.
 
 **Follow-ups.** `ctrl+r` lists running agents, the ones waiting on you first.
 Pick one and Enter sends your prompt to it instead of starting a new agent.
-`esc` goes back to launching.
+`esc` goes back to launching. A blocked agent cannot be picked until you answer
+it in its own pane, since Herdr will not prompt it.
 
 **Saving for later.** With [Scratchpad](https://github.com/Taanviir/herdr-scratchpad)
 installed, `ctrl+s` turns the prompt into a note instead of launching it. The
@@ -97,8 +102,9 @@ brings notes back here as a prompt.
 
 **Drafts and history.** Closing with `esc` keeps your prompt, agent,
 destination and directory for next time. A launch that fails comes back the
-same way, so you can retry. `↑` past the first line recalls your last 50
-prompts.
+same way, so you can retry. When several are waiting, the newest opens first
+and the rest follow one per opening. `↑` past the first line recalls your
+last 50 prompts.
 
 **Pasting.** Pastes work in any terminal, and `ctrl+v` reads the clipboard
 itself. If you drop a macOS screenshot from its floating thumbnail, macOS
@@ -132,9 +138,9 @@ plugin's config directory (`herdr plugin config-dir taanviir.quick-prompt`):
 | Field | |
 | --- | --- |
 | `name` | required, unique |
-| `agent` | optional agent kind, as listed under `ctrl+k` |
+| `agent` | optional agent kind, as listed under `ctrl+k`; ignored in a follow-up |
 | `prefix`, `postfix` | text sent before and after your prompt |
-| `task` | `skip` launches straight away when the prompt is empty |
+| `task` | `skip` launches straight away when the prompt is empty, except in a follow-up |
 
 A preset with a mistake in it is left out, and the list says why.
 
@@ -147,10 +153,13 @@ Everything lives in the plugin state directory, normally
 | --- | --- |
 | `prefs.json` | recent agents, directories, destination, models |
 | `history.json` | your last 50 prompts, as plain text; delete it to forget them |
-| `draft.json` | the unsent or failed prompt, dropped after a day |
+| `draft-*.json` | unsent and failed prompts, one per file, dropped after a day |
 | `attachments/` | copied screenshots, deleted after a week |
-| `startup.jsonl` | launch timings, without prompt text |
-| `crash.log` | errors from the popup |
+| `startup.jsonl` | launch timings, and why a launch failed, without prompt text |
+| `crash.log` | errors from the popup and the launcher |
+
+The two logs move to `.previous` once they pass 256 KB, so neither grows for
+ever.
 
 ## From other plugins
 
@@ -173,8 +182,9 @@ herdr plugin pane open --plugin taanviir.quick-prompt --entrypoint picker \
 | `QUICK_PROMPT_CWD` | the directory it starts in |
 | `QUICK_PROMPT_WORKSPACE`, `QUICK_PROMPT_PANE` | where tabs and splits open |
 
-A handed-over prompt is not saved as your draft, and any draft you left stays
-for next time.
+A handed-over prompt is never saved as a draft, not even when its launch fails,
+since it is still in the plugin that sent it. Any draft you left stays for next
+time.
 
 ## Troubleshooting
 
