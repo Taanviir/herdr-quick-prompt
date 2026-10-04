@@ -879,12 +879,12 @@ test("the hint line suits the moment: ways to fill an empty prompt, ways to send
   const withHistory = picker(null, { history: [{ text: "older" }] });
   assert.equal(withHistory.evaluate("hints(71)"), "↑ history · ctrl+p presets · ctrl+r follow up · ctrl+g keys");
   ui.evaluate("state.prompt = new Editor('fix it')");
-  assert.equal(ui.evaluate("hints(71)"), "⏎ launch · ctrl+l launch & stay · shift+⏎ newline · esc close");
+  assert.equal(ui.evaluate("hints(71)"), "⏎ launch · ctrl+l launch & stay · \\⏎ newline · esc close");
   assert.equal(ui.evaluate("hints(30)"), "⏎ launch · esc close", "a narrow popup keeps the first and last");
   const scratchpad = { available: () => true, save: () => assert.fail("not saved") };
   const notes = picker(null, { scratchpad });
   notes.evaluate("state.prompt = new Editor('fix it')");
-  assert.equal(notes.evaluate("hints(80)"), "⏎ launch · ctrl+l launch & stay · ctrl+s note · shift+⏎ newline · esc close");
+  assert.equal(notes.evaluate("hints(80)"), "⏎ launch · ctrl+l launch & stay · ctrl+s note · \\⏎ newline · esc close");
   assert.equal(notes.evaluate("hints(60)"), "⏎ launch · ctrl+l launch & stay · ctrl+s note · esc close", "the note outlasts the newline");
   const handedOver = picker(null, { scratchpad, env: { QUICK_PROMPT_TEXT: "from notes" } });
   assert.doesNotMatch(handedOver.evaluate("hints(80)"), /ctrl\+s/, "a handed-over prompt is a note already");
