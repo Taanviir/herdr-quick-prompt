@@ -29,7 +29,7 @@ testing the published copy.
 | --- | --- |
 | `herdr-plugin.toml` | Manifest: the `open`, `duplicate` and `setup` actions, and the `picker` popup pane |
 | `bin/open.js` | Resolves the caller's location and opens the popup |
-| `bin/setup.js` | Writes the keybinding into the user's `config.toml` |
+| `bin/setup.js` | Writes the `open` and `duplicate` keybindings into the user's `config.toml` |
 | `bin/picker.js` | The modal TUI: rendering, keys, paste |
 | `bin/launch.js` | Detached worker: creates the tab, split, workspace or worktree, starts the agent, delivers the prompt; or sends a follow-up |
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
@@ -44,10 +44,10 @@ testing the published copy.
 | `lib/dropped.js` | Copying dropped files that would not survive until the agent reads them |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/running.js` | The running agents behind `ctrl+r`, waiting ones first |
-| `lib/worktree.js` | Branch names for the worktree destination, and the git repository check |
+| `lib/worktree.js` | Branch names and the base for the worktree destination, and the git repository check |
 | `lib/state.js` | Preferences, prompt history, launch requests and drafts under `HERDR_PLUGIN_STATE_DIR` |
 | `lib/scratchpad.js` | Saving a prompt as a Scratchpad note for `ctrl+s` |
-| `lib/presets.js` | Reading `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
+| `lib/presets.js` | Reading and checking `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
 
 ## Things that will bite you
 
@@ -95,6 +95,8 @@ import os, pty, fcntl, termios, struct, time
 pid, fd = pty.fork()
 if pid == 0:
     os.environ["QUICK_PROMPT_CWD"] = os.getcwd()
+    os.environ["HERDR_PLUGIN_STATE_DIR"] = "/tmp/qp-state"   # not .state/ in the checkout
+    os.environ["HERDR_BIN_PATH"] = "/bin/true"               # launches touch nothing real
     os.execvp("node", ["node", "bin/picker.js"])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 10, 73, 0, 0))
 time.sleep(0.9)
@@ -107,7 +109,9 @@ prompt where you expect it, and — for paste — that nothing launched.
 When changing anything the user can launch, remember that `bin/launch.js` starts
 a real agent in a real tab, and a follow-up types into an agent you have running.
 Point `HERDR_BIN_PATH` at `/bin/true` to exercise the path without one, or at a
-script that prints a canned `agent list` to try follow-ups.
+script that prints a canned `agent list` to try follow-ups. The same goes for
+`bin/setup.js`, which edits `config.toml`: its test runs it against a stub
+`herdr` that names a config file in a temporary directory.
 
 ## Screenshots
 
