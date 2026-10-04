@@ -1266,6 +1266,19 @@ test("PATH is swept once per directory however often it repeats", () => {
   assert.equal(executables.onPath("xclip"), false);
 });
 
+test("Scratchpad is found from the catalog's PATH sweep, or by its one name before there is one", () => {
+  const looked = [];
+  const scratchpadWith = (onPath) => load("lib/scratchpad.js", {
+    "./executables": { pathDirs: () => ["/a", "/b"], onPath: () => onPath },
+    "node:fs": { existsSync: (file) => { looked.push(file); return file === path.join("/b", "scratch"); } },
+  }).context.module.exports;
+  assert.equal(scratchpadWith(false).available(), false);
+  assert.equal(scratchpadWith(true).available(), true);
+  assert.deepEqual(looked, [], "a sweep already knows");
+  assert.equal(scratchpadWith(null).available(), true);
+  assert.deepEqual(looked, [path.join("/a", "scratch"), path.join("/b", "scratch")]);
+});
+
 test("ctrl+v tries the reader that worked last, Windows' first under bare WSL, and none not on PATH", async () => {
   const cache = {};
   const tried = [];
