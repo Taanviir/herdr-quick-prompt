@@ -1076,6 +1076,7 @@ function launch(anyway = null) {
     cwd: state.cwd,
     workspace,
     pane: originPane,
+    ...(handoff && { handoff: true }),
   });
   // Only once the request holds the prompt.
   clearDraft(draftFile);
@@ -1099,6 +1100,7 @@ function sendFollowUp() {
     preset: state.preset,
     destination: "follow-up",
     followUp: { target, title, kind, cwd },
+    ...(handoff && { handoff: true }),
   });
   clearDraft(draftFile);
   spawnDetached(process.execPath, [LAUNCHER, request]);
@@ -1129,14 +1131,15 @@ function saveNote() {
 }
 
 // Closing keeps what you typed for next time, in place of the draft this
-// opened with; closing an empty box forgets that draft.
+// opened with; closing an empty box forgets that draft. A handed-over prompt
+// is never kept: it is still wherever it came from.
 function keepDraft() {
+  if (handoff) return;
   if (!state.prompt.text.trim()) return clearDraft(draftFile);
   saveDraft({ kind: agent().kind, ...choice(), prompt: state.prompt.text, preset: state.preset, followUp: state.followUp, destination: destination().id, cwd: state.cwd }, draftFile);
 }
 
 function close() {
-  if (handoff) return quit(0);
   try {
     keepDraft();
   } catch { /* losing a draft is better than a modal that will not close */ }
