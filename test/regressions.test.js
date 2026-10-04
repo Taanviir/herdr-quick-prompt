@@ -272,6 +272,7 @@ function worktreeLaunch(request, { originHead = null, env = {} } = {}) {
     "node:child_process": {
       spawnSync: (_, args) => {
         if (args.includes("symbolic-ref")) return { status: originHead ? 0 : 1, stdout: originHead ? `${originHead}\n` : "" };
+        if (args.includes("rev-parse")) return { status: 0, stdout: `${args.at(-1).replace("^{commit}", "")}@commit\n` };
         return { status: args.at(-1) === "refs/heads/fix-the-login-bug" ? 0 : 1, stdout: "" };
       },
     },
@@ -308,9 +309,9 @@ test("a worktree branches from origin/HEAD, or QUICK_PROMPT_WORKTREE_BASE when s
     const created = calls.find((args) => args[0] === "worktree");
     return created.includes("--base") ? created[created.indexOf("--base") + 1] : null;
   };
-  assert.equal(base(worktreeLaunch({ prompt: "x" }, { originHead: "origin/main" })), "origin/main");
+  assert.equal(base(worktreeLaunch({ prompt: "x" }, { originHead: "origin/main" })), "origin/main@commit", "a commit, so the branch does not track origin");
   assert.equal(base(worktreeLaunch({ prompt: "x" })), null, "no remote default leaves Herdr branching from HEAD");
-  assert.equal(base(worktreeLaunch({ prompt: "x" }, { originHead: "origin/main", env: { QUICK_PROMPT_WORKTREE_BASE: "release" } })), "release");
+  assert.equal(base(worktreeLaunch({ prompt: "x" }, { originHead: "origin/main", env: { QUICK_PROMPT_WORKTREE_BASE: "release" } })), "release@commit");
 });
 
 test("an empty prompt with a preset names the worktree branch after the preset", () => {
