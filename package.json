@@ -1,6 +1,6 @@
 {
   "name": "herdr-quick-prompt",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "commonjs",
   "description": "Herdr plugin: pick a coding agent, type a prompt, launch it in a new tab",
