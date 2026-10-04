@@ -1107,9 +1107,10 @@ test("looking up the running agent is bounded and gives up quietly", () => {
   assert.equal(calls.length, 0, "no origin pane means nothing to ask");
 });
 
-// Every file in a state directory with its contents, to see that nothing changed.
-function snapshot(dir) {
-  return Object.fromEntries(fs.readdirSync(dir).sort().map((name) => [name, fs.readFileSync(path.join(dir, name), "utf8")]));
+// The draft files in a state directory with their contents, to see that none changed.
+function draftsIn(dir) {
+  return Object.fromEntries(fs.readdirSync(dir).filter((name) => name.startsWith("draft-")).sort()
+    .map((name) => [name, fs.readFileSync(path.join(dir, name), "utf8")]));
 }
 
 test("a prompt handed over by another plugin fills the box and leaves the drafts alone", () => {
@@ -1121,14 +1122,14 @@ test("a prompt handed over by another plugin fills the box and leaves the drafts
   assert.equal(ui.evaluate("state.cwd"), "/tmp", "the draft's directory is not restored either");
   assert.match(ui.evaluate("state.notice"), /^From Scratchpad/);
   assert.equal(ui.evaluate("draftFile"), null, "it does not hold the draft it would replace or clear");
-  const before = snapshot(ui.dir);
+  const before = draftsIn(ui.dir);
 
   ui.evaluate("close()");
-  assert.deepEqual(snapshot(ui.dir), before, "closing neither saves the handoff nor clears the draft");
+  assert.deepEqual(draftsIn(ui.dir), before, "closing neither saves the handoff nor clears the draft");
 
   ui.evaluate("state.prompt = new Editor('')");
   ui.evaluate("close()");
-  assert.deepEqual(snapshot(ui.dir), before, "nor does closing it emptied");
+  assert.deepEqual(draftsIn(ui.dir), before, "nor does closing it emptied");
 
   ui.evaluate("state.prompt = new Editor('From my scratchpad')");
   ui.evaluate("launch()");
@@ -1138,6 +1139,20 @@ test("a prompt handed over by another plugin fills the box and leaves the drafts
   const followUp = picker(draft, { env: handoff });
   followUp.evaluate("state.followUp = { target: 'w1:p3', title: 'busy', kind: 'claude', cwd: '/tmp' }; sendFollowUp()");
   assert.deepEqual({ ...followUp.drafts() }, draft, "nor does following up with it");
+
+  const [launched] = fs.readdirSync(ui.dir).filter((name) => name.startsWith("request-"));
+  assert.equal(ui.state.finishRequest(path.join(ui.dir, launched), false), false);
+  assert.deepEqual(draftsIn(ui.dir), before, "a failed launch of it does not become a draft");
+  const abandoned = ui.state.writeRequest({ ...requests.at(-1) });
+  fs.utimesSync(abandoned, new Date(0), new Date(0));
+  ui.state.sweepStaleRequests();
+  assert.deepEqual(draftsIn(ui.dir), before, "nor does one the sweep finds abandoned");
+
+  const crashed = picker(draft, { env: handoff });
+  crashed.context.process.exit = () => {};
+  const atCrash = draftsIn(crashed.dir);
+  crashed.evaluate("reportCrash(new Error('boom'))");
+  assert.deepEqual(draftsIn(crashed.dir), atCrash, "nor does a crash keep it");
 });
 
 test("ctrl+s saves the prompt to Scratchpad from its directory and closes", () => {

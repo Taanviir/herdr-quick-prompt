@@ -182,8 +182,9 @@ herdr plugin pane open --plugin taanviir.quick-prompt --entrypoint picker \
 | `QUICK_PROMPT_CWD` | the directory it starts in |
 | `QUICK_PROMPT_WORKSPACE`, `QUICK_PROMPT_PANE` | where tabs and splits open |
 
-A handed-over prompt is not saved as your draft, and any draft you left stays
-for next time.
+A handed-over prompt is never saved as a draft, not even when its launch fails,
+since it is still in the plugin that sent it. Any draft you left stays for next
+time.
 
 ## Troubleshooting
 

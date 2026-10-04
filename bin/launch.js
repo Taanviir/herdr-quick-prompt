@@ -298,7 +298,7 @@ try {
   const message = error.message ?? String(error);
   const kept = cleanUp();
   timing?.finish(false, error.logged ?? message);
-  finishRequest(process.argv[2], false);
-  notify("Quick Prompt failed", `${message}${kept} — reopen Quick Prompt to recover your draft.`);
+  const recoverable = finishRequest(process.argv[2], false);
+  notify("Quick Prompt failed", `${message}${kept}${recoverable ? " — reopen Quick Prompt to recover your draft." : ""}`);
   process.exit(1);
 }
