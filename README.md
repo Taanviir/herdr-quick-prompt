@@ -86,9 +86,10 @@ remembered for next time; a workspace or worktree is for one launch only. A
 new worktree gets a branch named after the first line of your prompt, leaving
 out any paths ("Fix the login bug" becomes `fix-the-login-bug`), after the
 preset if the prompt is empty, or a random name. The destination row shows the
-branch as you type. It branches from `origin/HEAD` when the repository has
-one, otherwise from the current `HEAD`; set `QUICK_PROMPT_WORKTREE_BASE` to
-use another base. The worktree option only appears inside a git repository.
+branch as you type. It branches from the commit `origin/HEAD` points at when
+the repository has one, otherwise from the current `HEAD`; set
+`QUICK_PROMPT_WORKTREE_BASE` to use another base. The new branch does not
+track its base, so a plain `git push` will not aim at `main`. The worktree option only appears inside a git repository.
 If the agent never starts, the tab, split or workspace made for it is closed
 again; a worktree is kept.
 
