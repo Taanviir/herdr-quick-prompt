@@ -1964,6 +1964,19 @@ function launchOf(request) {
   return { calls, notifications };
 }
 
+test("after a handed-over prompt launches and stays, the next one is yours", () => {
+  const scratchpad = { available: () => true, save: () => ({ ok: true, message: "" }) };
+  const ui = picker({ kind: "amp", prompt: "my own draft" }, { scratchpad, env: { QUICK_PROMPT_TEXT: "from notes" } });
+  ui.evaluate("onMainKey('\\x0c', {ctrl: true, name: 'l'})");
+  assert.equal(ui.evaluate("state.prompt.text"), "");
+  ui.evaluate("state.prompt = new Editor('typed next')");
+  assert.match(ui.evaluate("hints(80)"), /ctrl\+s note/);
+  ui.evaluate("onEscape()");
+  const drafts = fs.readdirSync(ui.dir).filter((name) => name.startsWith("draft-"))
+    .map((name) => JSON.parse(fs.readFileSync(path.join(ui.dir, name), "utf8")).prompt).sort();
+  assert.deepEqual(drafts, ["my own draft", "typed next"], "kept beside the draft it never touched");
+});
+
 test("a launch that stays opens without focus and says where it went", () => {
   const created = ({ calls }) => calls.find((args) => args[1] === "create" || args[1] === "split");
   const quiet = launchOf({ kind: "claude", prompt: "fix it", destination: "tab", cwd: "/work/alpha" });
