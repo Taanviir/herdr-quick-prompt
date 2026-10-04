@@ -367,13 +367,13 @@ function presetRow(withKeys) {
 function hints(inner) {
   let parts;
   if (state.followUp) {
-    parts = ["⏎ send", "ctrl+r other agent", "shift+⏎ newline", "esc back", "ctrl+g keys"];
+    parts = ["⏎ send", "ctrl+r other agent", "\\⏎ newline", "esc back", "ctrl+g keys"];
   } else if (state.prompt.isEmpty) {
     const verb = composePrompt(state.preset, "") ? "⏎ launch" : null;
     const history = state.history.entries.length ? "↑ history" : null;
     parts = [verb, history, "ctrl+p presets", "ctrl+r follow up", "ctrl+g keys"].filter(Boolean);
   } else {
-    parts = ["⏎ launch", "ctrl+l launch & stay", canSaveNote && "ctrl+s note", "shift+⏎ newline", "esc close"].filter(Boolean);
+    parts = ["⏎ launch", "ctrl+l launch & stay", canSaveNote && "ctrl+s note", "\\⏎ newline", "esc close"].filter(Boolean);
   }
   return fit(parts, inner);
 }
@@ -390,7 +390,7 @@ function fit(parts, width) {
 const KEYS = [
   ["⏎", "launch"],
   ["ctrl+l", "launch, stay here"],
-  ["shift+⏎ \\⏎", "new line"],
+  ["\\⏎ shift+⏎", "new line"],
   ["↑ ↓", "lines, then history"],
   ["tab alt+1…9", "next or Nth agent"],
   ["ctrl+k", "every agent"],
