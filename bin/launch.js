@@ -24,9 +24,13 @@ const READY_TIMEOUT_MS = 120000;
 const READY_POLL_MS = 400;
 const READY_POLLS = 40;
 // Agent TUIs repaint for a moment after they report readiness, and keystrokes
-// sent into that repaint are lost.
-const SETTLE_MS = 900;
+// sent into that repaint are lost. Herdr reports a prompt lost that way as
+// stalled, so the settle only has to make it unlikely.
+const SETTLE_MS = 300;
 const DELIVERY_ATTEMPTS = 3;
+// Herdr calls a prompt stalled when the agent has not started on it within 5s.
+// The caller's timeout stays clear of that, so a stall is reported as one.
+const PROMPT_TIMEOUT_MS = 6000;
 const FOLLOW_UP_TIMEOUT_MS = 20000;
 let timing;
 // What this launch created, and whether an agent ever started in it.
@@ -258,33 +262,22 @@ function waitInteractive(pane) {
   return false;
 }
 
-// `agent prompt` can report success while the agent's startup repaint eats the
-// keystrokes, so confirm the text actually landed before giving up on it.
+// The startup repaint can eat the keystrokes of a prompt Herdr says it sent.
+// The agent starting work is what shows it landed; Herdr answers
+// agent_prompt_stalled when it never did, and that is worth another try.
 function deliverPrompt(pane, kind, prompt) {
   for (let attempt = 0; attempt < DELIVERY_ATTEMPTS; attempt += 1) {
     sleep(SETTLE_MS);
-
-    const sent = run(["agent", "prompt", pane, prompt], { check: false });
-    if (sent.ok === false && !/stalled|blocked|not_ready|busy/i.test(`${sent.code ?? ""} ${sent.message}`)) {
+    const sent = run([
+      "agent", "prompt", pane, prompt,
+      "--wait", "--until", "working", "--until", "blocked", "--timeout", String(PROMPT_TIMEOUT_MS),
+    ], { check: false });
+    if (sent.ok) return;
+    if (!/stalled|not_ready|busy/i.test(`${sent.code ?? ""} ${sent.message}`)) {
       throw failure(`could not send the prompt to ${kind}: ${sent.message}`);
     }
-
-    sleep(SETTLE_MS);
-    if (promptLanded(pane, prompt)) return;
   }
   throw failure(`${kind} did not accept the prompt`);
-}
-
-function promptLanded(pane, prompt) {
-  const status = agentState(pane).agent_status;
-  if (status === "working" || status === "blocked") return true;
-
-  const res = run(["agent", "read", pane, "--source", "detection", "--lines", "60"], { check: false });
-  if (!res.ok) return false;
-
-  const screen = (res.result?.text ?? res.stdout ?? "").replace(/\s+/g, " ");
-  const needle = prompt.split("\n")[0].trim().slice(0, 16).replace(/\s+/g, " ");
-  return needle.length > 0 && screen.includes(needle);
 }
 
 try {
