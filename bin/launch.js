@@ -178,11 +178,11 @@ function startAgent(name, kind, pane, agentArgs, timeoutMs) {
 
     last = res.message;
     // The agent is running but not idle: a trust dialog, an inline prompt it is
-    // already working on, or simply slower than the timeout. `agent_pane_busy`
-    // on a pane this launch created is the same agent, seen by a retry.
+    // already working on, or simply slower than the timeout. A busy pane has
+    // not accepted the launch yet; its shell may still be starting.
     const reason = `${res.code ?? ""} ${last}`;
     if (res.code === "invalid_agent_argument") break;
-    if (res.code === "timeout" || /agent_not_ready|agent_pane_busy/i.test(reason)) {
+    if (res.code === "timeout" || /agent_not_ready/i.test(reason)) {
       return { started: true, ready: false, message: last };
     }
     if (!/pane|shell|prompt|busy|not_available/i.test(reason)) break;

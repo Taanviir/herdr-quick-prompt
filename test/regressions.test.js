@@ -47,13 +47,14 @@ test("structured readiness errors preserve their code and do not restart an agen
 // What a launch in a new tab sends Herdr, with `agent start` timing out the way
 // it did for most launches in the wild: Herdr never registers the agent's name,
 // so anything asked by name comes back agent_not_found.
-function timedOutLaunch(prompt, { kind = "claude", inline = true } = {}) {
+function timedOutLaunch(prompt, { kind = "claude", inline = true, busyStarts = 0 } = {}) {
   const calls = [];
   const records = [];
   const notifications = [];
+  const finished = [];
   const launcher = load("bin/launch.js", {
     "node:fs": { readFileSync: () => JSON.stringify({ kind, prompt }) },
-    "../lib/state": { finishRequest: () => {} },
+    "../lib/state": { finishRequest: (_, success) => { finished.push(success); return !success; } },
     "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), note: (fields) => records.push(fields), finish: (...args) => records.push(args) }) },
     "../lib/agents": { supportsInlinePrompt: () => inline },
     "../lib/herdr": {
@@ -62,7 +63,10 @@ function timedOutLaunch(prompt, { kind = "claude", inline = true } = {}) {
       run: (args) => {
         calls.push(args);
         if (args[0] === "tab") return { ok: true, result: { tab: { tab_id: "w9:t1" }, root_pane: { pane_id: "w9:p1" } } };
-        if (args[1] === "start") return { ok: false, code: "timeout", message: "timed out waiting for the agent" };
+        if (args[1] === "start") {
+          if (busyStarts-- > 0) return { ok: false, code: "agent_pane_busy", message: "pane is not at a shell prompt" };
+          return { ok: false, code: "timeout", message: "timed out waiting for the agent" };
+        }
         if (args[0] === "agent" && ["wait", "get", "prompt", "read"].includes(args[1]) && args[2] !== "w9:p1") {
           return { ok: false, code: "agent_not_found", message: `agent ${args[2]} not found` };
         }
@@ -76,8 +80,27 @@ function timedOutLaunch(prompt, { kind = "claude", inline = true } = {}) {
   launcher.evaluate("sleep = () => {}");
   const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
   launcher.evaluate(source.slice(source.indexOf("try {\n  main();")));
-  return { calls, records, notifications };
+  return { calls, records, notifications, finished };
 }
+
+test("a busy new pane is retried, and a pane that stays busy keeps the prompt as a draft", () => {
+  for (const inline of [true, false]) {
+    const recovered = timedOutLaunch("analyze application performance", { inline, busyStarts: 2 });
+    const starts = recovered.calls.filter((args) => args[1] === "start");
+    assert.equal(starts.length, 3);
+    assert.ok(starts.every((args) => JSON.stringify(args) === JSON.stringify(starts[0])));
+    assert.deepEqual(recovered.finished, [true]);
+    assert.deepEqual(recovered.notifications, []);
+
+    const failed = timedOutLaunch("analyze application performance", { inline, busyStarts: Infinity });
+    assert.equal(failed.calls.filter((args) => args[1] === "start").length, inline ? 24 : 12);
+    assert.deepEqual(failed.finished, [false]);
+    assert.equal(failed.records.at(-1)[0], false);
+    assert.ok(failed.calls.some((args) => args[0] === "tab" && args[1] === "close"));
+    assert.equal(failed.calls.some((args) => args[0] === "agent" && ["wait", "prompt"].includes(args[1])), false);
+    assert.match(failed.notifications.at(-1)[1], /recover your draft/);
+  }
+});
 
 test("an agent start that times out is a slow agent, and it is followed by its pane", () => {
   const { calls, records, notifications } = timedOutLaunch("one\ntwo");
