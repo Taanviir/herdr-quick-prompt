@@ -30,10 +30,16 @@ testing the published copy.
 | `herdr-plugin.toml` | Manifest: the `open`, `duplicate` and `setup` actions, and the `picker` popup pane |
 | `bin/open.js` | Resolves the caller's location and opens the popup |
 | `bin/setup.js` | Writes the `open` and `duplicate` keybindings into the user's `config.toml` |
-| `bin/picker.js` | The modal TUI: rendering, keys, paste |
+| `bin/picker.js` | The popup's entrypoint: wires the terminal to the picker and paints the first frame |
+| `lib/picker/session.js` | What the popup opens with — where it was invoked, the agents, presets and restored draft — and the one `state` object the rest share |
+| `lib/picker/render.js` | Painting: the main screen row by row, or the open overlay |
+| `lib/picker/overlays.js` | The screens over the prompt: keys, running agents, every agent, model, presets, directory |
+| `lib/picker/input.js` | Keys and pastes: the main screen's keys, the overlay's, and telling a paste from typing |
+| `lib/picker/actions.js` | Launching, following up, saving a note, keeping the draft, quitting |
+| `lib/picker/editing.js` | The editing keys the prompt and the directory field share |
 | `bin/launch.js` | Detached worker: creates the tab, split, workspace or worktree, starts the agent, delivers the prompt; or sends a follow-up |
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
-| `lib/agents.js` | Agent catalog and its cache, which kinds take an inline prompt, the agent running in a pane |
+| `lib/agents.js` | Agent catalog and its cache, which kinds take an inline prompt or a prompt file, the agent running in a pane |
 | `lib/executables.js` | What is on `PATH`, one sweep per directory |
 | `lib/models.js` | Models and efforts per kind for `ctrl+o`, and the launch flags they become |
 | `lib/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
@@ -45,7 +51,7 @@ testing the published copy.
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/running.js` | The running agents behind `ctrl+r`, waiting ones first |
 | `lib/worktree.js` | Branch names and the base for the worktree destination, and the git repository check |
-| `lib/state.js` | Preferences, prompt history, launch requests and drafts under `HERDR_PLUGIN_STATE_DIR` |
+| `lib/state.js` | Preferences, prompt history, launch requests, prompt files and drafts under `HERDR_PLUGIN_STATE_DIR` |
 | `lib/scratchpad.js` | Saving a prompt as a Scratchpad note for `ctrl+s` |
 | `lib/presets.js` | Reading and checking `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
 
@@ -78,6 +84,12 @@ columns and two rows go to the frame. Cells the picker never writes show the
 panes behind it, so every row is padded to the full width.
 
 ## Testing
+
+`npm test` runs `test/*.test.js`. The tests load a module into a `vm` context
+with its `require`s mocked, so nothing touches a real terminal, agent or state
+directory; `test/support/helpers.js` has the loader and the shared fixtures.
+The picker's modules all load into one context, so `evaluate` can reach
+everything they export.
 
 Run the picker in any pane to poke at it by hand:
 

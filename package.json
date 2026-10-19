@@ -1,12 +1,12 @@
 {
   "name": "herdr-quick-prompt",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": true,
   "type": "commonjs",
   "description": "Herdr plugin: pick a coding agent, type a prompt, launch it in a new tab",
   "license": "MIT",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=18"
