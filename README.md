@@ -53,7 +53,8 @@ description = "Quick Prompt with the focused agent"
 | `↑` / `↓` | move between lines; past the first or last, earlier prompts |
 | `tab`, `alt+1`…`alt+9` | next agent, or jump to a numbered one |
 | `ctrl+k` | every agent Herdr supports, filterable |
-| `ctrl+t` | where it opens: tab → split right → split down → workspace → worktree |
+| `ctrl+t` | where it opens: tab → split right → split down → workspace |
+| `ctrl+n` | open in a new git worktree instead, or back |
 | `ctrl+d` | which directory it starts in |
 | `ctrl+o` | model and effort (Claude Code and Codex) |
 | `ctrl+p` / `ctrl+x` | pick a preset / remove it |
@@ -82,14 +83,17 @@ supports:
 ![The full agent list, with installed agents marked](docs/quick-prompt-agents.png)
 
 **Destination.** `ctrl+t` picks where the agent opens. Tab and split are
-remembered for next time; a workspace or worktree is for one launch only. A
-new worktree gets a branch named after the first line of your prompt, leaving
+remembered for next time; a workspace or worktree is for one launch only.
+`ctrl+n` opens the agent in a new git worktree instead, and pressing it again
+goes back. To have the agent make its own worktree, leave this off and say so
+in the prompt. A new worktree gets a branch named after the first line of your prompt, leaving
 out any paths ("Fix the login bug" becomes `fix-the-login-bug`), after the
 preset if the prompt is empty, or a random name. The destination row shows the
 branch as you type. It branches from the commit `origin/HEAD` points at when
 the repository has one, otherwise from the current `HEAD`; set
 `QUICK_PROMPT_WORKTREE_BASE` to use another base. The new branch does not
-track its base, so a plain `git push` will not aim at `main`. The worktree option only appears inside a git repository.
+track its base, so a plain `git push` will not aim at `main`. `ctrl+n` only
+works inside a git repository.
 If the agent never starts, the tab, split or workspace made for it is closed
 again; a worktree is kept.
 
