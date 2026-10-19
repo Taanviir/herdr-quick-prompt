@@ -445,3 +445,10 @@ test("a follow-up that lands says so quietly", () => {
   const { notifications } = launchOf({ kind: "codex", prompt: "and the docs", followUp: { target: "w1:p2", title: "Fix the build", kind: "codex" } });
   assert.deepEqual(notifications.map((args) => [...args]), [["Quick Prompt", "sent to Fix the build", "none"]]);
 });
+
+test("an agent is named after its pane, without asking Herdr which names are taken", () => {
+  const { calls } = timedOutLaunch("fix the login bug");
+  const start = calls.find((args) => args[1] === "start");
+  assert.equal(start[2], "qp-claude-w9-p1");
+  assert.equal(calls.some((args) => args[0] === "agent" && args[1] === "list"), false);
+});
