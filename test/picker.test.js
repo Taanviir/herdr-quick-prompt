@@ -6,7 +6,7 @@ const path = require("node:path");
 const { test } = require("node:test");
 const { load, loadPicker, picker, stateIn, LISTED } = require("./support/helpers");
 
-test("ctrl+t offers a worktree only inside a git repository, and launch refuses one outside", () => {
+test("ctrl+t never lands on a worktree; ctrl+n turns one on inside a repository and back off", () => {
   const requests = [];
   const ui = picker(null, { requests });
   const cycle = () => {
@@ -17,10 +17,22 @@ test("ctrl+t offers a worktree only inside a git repository, and launch refuses 
     }
     return seen;
   };
-  assert.equal(cycle().includes("worktree"), false);
   ui.evaluate("state.cwd = '/repo'");
-  assert.equal(cycle().includes("worktree"), true);
-  ui.evaluate("state.destination = DESTINATIONS.findIndex((d) => d.id === 'worktree'); state.cwd = '/tmp'");
+  assert.equal(cycle().includes("worktree"), false);
+
+  ui.evaluate("state.destination = DESTINATIONS.findIndex((d) => d.id === 'right')");
+  ui.evaluate("toggleWorktree()");
+  assert.equal(ui.evaluate("destination().id"), "worktree");
+  ui.evaluate("toggleWorktree()");
+  assert.equal(ui.evaluate("destination().id"), "right");
+  ui.evaluate("toggleWorktree(); cycleDestination()");
+  assert.equal(ui.evaluate("destination().id"), "right", "ctrl+t from a worktree goes back too");
+
+  ui.evaluate("state.cwd = '/tmp'; toggleWorktree()");
+  assert.equal(ui.evaluate("destination().id"), "right");
+  assert.match(ui.evaluate("state.notice"), /git repository/);
+
+  ui.evaluate("state.destination = DESTINATIONS.findIndex((d) => d.id === 'worktree')");
   ui.evaluate("launch()");
   assert.match(ui.evaluate("state.notice"), /git repository/);
   assert.equal(requests.length, 0, "nothing was launched");
@@ -30,9 +42,9 @@ test("the destination row shows the branch a worktree will get", () => {
   const ui = picker();
   const row = () => ui.evaluate("destinationRow(71)").replace(/\x1b\[[0-9;]*m/g, "");
   ui.evaluate("state.cwd = '/repo'; state.destination = DESTINATIONS.findIndex((d) => d.id === 'worktree')");
-  assert.match(row(), /new worktree · random branch \(ctrl\+t\)/);
+  assert.match(row(), /new worktree · random branch \(ctrl\+n\)/);
   ui.evaluate("state.prompt = new Editor('Fix the login bug')");
-  assert.match(row(), /new worktree · fix-the-login-bug \(ctrl\+t\)/);
+  assert.match(row(), /new worktree · fix-the-login-bug \(ctrl\+n\)/);
   ui.evaluate("state.prompt = new Editor(''); state.preset = { name: 'nightly', prefix: 'x', postfix: '', task: 'skip' }");
   assert.match(row(), /new worktree · nightly/);
 });
