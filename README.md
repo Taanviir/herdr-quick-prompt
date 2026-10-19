@@ -230,10 +230,10 @@ Code, Codex and pi get a line pointing at a copy of it in
 and Cursor has it typed in. Set `QUICK_PROMPT_NO_INLINE=1` to
 type it in for every agent.
 
-Agents are named `qp-<kind>`, so scripts can keep driving them:
+Agents are named `qp-<kind>-<pane>`, so scripts can keep driving them:
 
 ```bash
-herdr agent read qp-codex --source recent-unwrapped --lines 120
+herdr agent read qp-codex-w1-p3 --source recent-unwrapped --lines 120
 ```
 
 ## Contributing
