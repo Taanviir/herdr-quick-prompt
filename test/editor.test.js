@@ -108,3 +108,17 @@ test("word motion and deletion stop at whitespace from either side", () => {
   editor.deleteWord();
   assert.equal(editor.text, "fix  ");
 });
+
+test("a word that runs past the edge moves down whole, and only a word wider than the row is cut", () => {
+  const { Editor } = require("../lib/editor");
+  const typing = new Editor("fix the login bug");
+  assert.deepEqual([...typing.layout(10).rows], ["fix the ", "login bug"]);
+  assert.deepEqual({ ...typing.layout(10).caret }, { row: 1, col: 9 });
+
+  const mid = new Editor("fix the login");
+  mid.cursor = 9; // inside "login"
+  assert.deepEqual({ ...mid.layout(10).caret }, { row: 1, col: 1 });
+
+  assert.deepEqual([...new Editor("supercalifragilistic").layout(8).rows], ["supercal", "ifragili", "stic"]);
+  assert.deepEqual([...new Editor("one\ntwo three").layout(6).rows], ["one", "two ", "three"]);
+});
