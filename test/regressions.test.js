@@ -47,16 +47,24 @@ test("structured readiness errors preserve their code and do not restart an agen
 // What a launch in a new tab sends Herdr, with `agent start` timing out the way
 // it did for most launches in the wild: Herdr never registers the agent's name,
 // so anything asked by name comes back agent_not_found.
-function timedOutLaunch(prompt, { kind = "claude", inline = true, busyStarts = 0 } = {}) {
+function timedOutLaunch(prompt, { kind = "claude", inline = true, promptFile = false, busyStarts = 0 } = {}) {
   const calls = [];
+  const saved = [];
   const records = [];
   const notifications = [];
   const finished = [];
   const launcher = load("bin/launch.js", {
     "node:fs": { readFileSync: () => JSON.stringify({ kind, prompt }) },
-    "../lib/state": { finishRequest: (_, success) => { finished.push(success); return !success; } },
+    "../lib/state": {
+      finishRequest: (_, success) => { finished.push(success); return !success; },
+      writePromptFile: (text) => { saved.push(text); return "/state/prompts/prompt-1.md"; },
+    },
     "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), note: (fields) => records.push(fields), finish: (...args) => records.push(args) }) },
-    "../lib/agents": { supportsInlinePrompt: () => inline },
+    "../lib/agents": {
+      supportsInlinePrompt: () => inline,
+      readsPromptFile: () => promptFile,
+      promptFileArgs: (_, file) => ["--add-dir=/state/prompts", `read ${file}`],
+    },
     "../lib/herdr": {
       HerdrError: Error,
       notify: (...args) => notifications.push(args),
@@ -80,7 +88,7 @@ function timedOutLaunch(prompt, { kind = "claude", inline = true, busyStarts = 0
   launcher.evaluate("sleep = () => {}");
   const source = fs.readFileSync(path.resolve(__dirname, "../bin/launch.js"), "utf8");
   launcher.evaluate(source.slice(source.indexOf("try {\n  main();")));
-  return { calls, records, notifications, finished };
+  return { calls, records, notifications, finished, saved };
 }
 
 test("a busy new pane is retried, and a pane that stays busy keeps the prompt as a draft", () => {
@@ -131,6 +139,27 @@ test("a prompt starting with a dash is typed in rather than handed to the CLI as
   const starts = calls.filter((args) => args[1] === "start");
   assert.equal(starts[0].includes("--help me with the build"), false);
   assert.ok(calls.some((args) => args[1] === "prompt" && args[3] === "--help me with the build"));
+});
+
+test("a prompt Herdr cannot pass as an argument is saved to a file the agent is pointed at", () => {
+  for (const prompt of ["one\ntwo", "--help me with the build"]) {
+    const { calls, records, saved } = timedOutLaunch(prompt, { promptFile: true });
+    const starts = calls.filter((args) => args[1] === "start");
+    assert.equal(starts.length, 1);
+    assert.equal(starts[0][starts[0].indexOf("--timeout") + 1], "3500");
+    assert.deepEqual([...starts[0].slice(starts[0].indexOf("--") + 1)], ["--add-dir=/state/prompts", "read /state/prompts/prompt-1.md"]);
+    assert.deepEqual(saved, [prompt]);
+    assert.equal(calls.some((args) => args[1] === "prompt"), false, "nothing is typed on top of it");
+    assert.deepEqual({ ...records[0] }, { inline: true });
+  }
+});
+
+test("claude is let into the prompt's directory, without the prompt line read as another one", () => {
+  const { promptFileArgs } = require("../lib/agents");
+  assert.deepEqual(promptFileArgs("claude", "/state/prompts/p.md"),
+    ["--add-dir=/state/prompts", 'My prompt is in the file "/state/prompts/p.md". Read it and do what it says.']);
+  assert.deepEqual(promptFileArgs("codex", "/state/prompts/p.md"),
+    ['My prompt is in the file "/state/prompts/p.md". Read it and do what it says.']);
 });
 
 // A launch to `destination` whose agent start gets `startReply`.
@@ -578,13 +607,13 @@ test("a saved draft round-trips and one older than a day is removed", () => {
   assert.equal(fs.existsSync(file), false);
 });
 
-test("a multiline prompt is typed in, since Herdr refuses newlines in launch arguments", () => {
+test("a multiline prompt is typed in when the agent cannot be pointed at a file", () => {
   const starts = [];
   const delivered = [];
   const launcher = load("bin/launch.js", {
-    "node:fs": { readFileSync: () => JSON.stringify({ kind: "claude", prompt: "one\ntwo" }) },
+    "node:fs": { readFileSync: () => JSON.stringify({ kind: "cursor", prompt: "one\ntwo" }) },
     "../lib/timing": { createTiming: () => null },
-    "../lib/agents": { supportsInlinePrompt: () => true },
+    "../lib/agents": { supportsInlinePrompt: () => true, readsPromptFile: () => false },
     "../lib/herdr": {
       run: (args) => {
         if (args[0] === "tab") return { ok: true, result: { root_pane: { pane_id: "test-pane" } } };
@@ -1285,8 +1314,9 @@ test("model flags go ahead of the inline prompt and survive falling back to typi
     const starts = [];
     const launcher = load("bin/launch.js", {
       "node:fs": { readFileSync: () => JSON.stringify({ kind: "codex", prompt, model: "gpt-5.5", effort: "low" }) },
+      "../lib/state": { writePromptFile: () => "/state/p.md" },
       "../lib/timing": { createTiming: () => null },
-      "../lib/agents": { supportsInlinePrompt: () => true },
+      "../lib/agents": { supportsInlinePrompt: () => true, readsPromptFile: () => true, promptFileArgs: (_, file) => [`read ${file}`] },
       "../lib/herdr": {
         run: (args) => {
           if (args[0] === "tab") return { ok: true, result: { root_pane: { pane_id: "test-pane" } } };
@@ -1303,7 +1333,7 @@ test("model flags go ahead of the inline prompt and survive falling back to typi
     assert.doesNotThrow(() => launcher.evaluate("main()"));
     const flags = ["-m", "gpt-5.5", "-c", "model_reasoning_effort=low"];
     if (prompt === "one line") assert.deepEqual(starts, [[...flags, prompt], flags]);
-    else assert.deepEqual(starts, [flags]);
+    else assert.deepEqual(starts, [[...flags, "read /state/p.md"]]);
   }
 });
 

@@ -33,7 +33,7 @@ testing the published copy.
 | `bin/picker.js` | The modal TUI: rendering, keys, paste |
 | `bin/launch.js` | Detached worker: creates the tab, split, workspace or worktree, starts the agent, delivers the prompt; or sends a follow-up |
 | `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
-| `lib/agents.js` | Agent catalog and its cache, which kinds take an inline prompt, the agent running in a pane |
+| `lib/agents.js` | Agent catalog and its cache, which kinds take an inline prompt or a prompt file, the agent running in a pane |
 | `lib/executables.js` | What is on `PATH`, one sweep per directory |
 | `lib/models.js` | Models and efforts per kind for `ctrl+o`, and the launch flags they become |
 | `lib/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
@@ -45,7 +45,7 @@ testing the published copy.
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/running.js` | The running agents behind `ctrl+r`, waiting ones first |
 | `lib/worktree.js` | Branch names and the base for the worktree destination, and the git repository check |
-| `lib/state.js` | Preferences, prompt history, launch requests and drafts under `HERDR_PLUGIN_STATE_DIR` |
+| `lib/state.js` | Preferences, prompt history, launch requests, prompt files and drafts under `HERDR_PLUGIN_STATE_DIR` |
 | `lib/scratchpad.js` | Saving a prompt as a Scratchpad note for `ctrl+s` |
 | `lib/presets.js` | Reading and checking `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
 
