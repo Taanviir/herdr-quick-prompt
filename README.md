@@ -221,8 +221,9 @@ the popup never started: check `node --version` and `herdr plugin list`.
 **An agent mangles the prompt.** Claude Code, Codex, Cursor and pi get the
 prompt as a launch argument; everything else has it typed in. A prompt with
 several lines, or one starting with `-`, cannot go in as an argument: Claude
-Code, Codex and pi get a line pointing at a copy of it in `.state/prompts/`
-(kept a day), and Cursor has it typed in. Set `QUICK_PROMPT_NO_INLINE=1` to
+Code, Codex and pi get a line pointing at a copy of it in
+`~/.local/state/herdr/plugins/taanviir.quick-prompt/prompts/` (kept a day),
+and Cursor has it typed in. Set `QUICK_PROMPT_NO_INLINE=1` to
 type it in for every agent.
 
 Agents are named `qp-<kind>`, so scripts can keep driving them:
