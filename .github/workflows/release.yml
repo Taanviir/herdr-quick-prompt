@@ -34,7 +34,7 @@ jobs:
           fi
 
       - if: steps.version.outputs.released != 'true'
-        run: node --test
+        run: npm test
 
       - name: Create the GitHub release
         if: steps.version.outputs.released != 'true'
