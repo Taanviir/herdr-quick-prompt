@@ -28,7 +28,7 @@ FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FONT_SIZE = 17
 PAD = 14          # inside the frame
 MARGIN = 18       # around the frame
-COLS, ROWS = 73, 16
+COLS, ROWS = 89, 21
 
 # The directory picker lists what is really on disk, so without a fixture the
 # images would differ from machine to machine and show whatever the author keeps
