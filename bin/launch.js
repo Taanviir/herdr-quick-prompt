@@ -6,10 +6,10 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { finishRequest, logCrash } = require("../lib/state");
+const { finishRequest, logCrash, writePromptFile } = require("../lib/state");
 const { run: herdrRun, notify, HerdrError } = require("../lib/herdr");
 const { createTiming } = require("../lib/timing");
-const { supportsInlinePrompt } = require("../lib/agents");
+const { supportsInlinePrompt, readsPromptFile, promptFileArgs } = require("../lib/agents");
 const { modelArgs } = require("../lib/models");
 const { composePrompt } = require("../lib/presets");
 const { branchName, uniqueBranch, worktreeBase } = require("../lib/worktree");
@@ -192,6 +192,20 @@ function startAgent(name, kind, pane, agentArgs, timeoutMs) {
   return { started: false, message: last };
 }
 
+// The launch arguments that hand the agent its prompt, or null to type it in.
+// Herdr refuses a launch argument with a newline in it, and the agent's CLI
+// would read one starting with a dash as an option, so those go in a file.
+function inlineArgs(kind, prompt) {
+  if (!prompt || !supportsInlinePrompt(kind)) return null;
+  if (!prompt.includes("\n") && !prompt.startsWith("-")) return [prompt];
+  if (!readsPromptFile(kind)) return null;
+  try {
+    return promptFileArgs(kind, writePromptFile(prompt));
+  } catch {
+    return null;
+  }
+}
+
 function main() {
   const file = process.argv[2];
   if (!file) process.exit(2);
@@ -208,14 +222,12 @@ function main() {
   opened = createTarget(request);
   const { pane } = opened;
 
-  // Herdr refuses a launch argument with a newline in it, and the agent's CLI
-  // would read one starting with a dash as an option, so those are typed in.
-  const inline = prompt && !prompt.includes("\n") && !prompt.startsWith("-") && supportsInlinePrompt(kind) ? prompt : null;
+  const inline = inlineArgs(kind, prompt);
   timing?.note({ inline: Boolean(inline) });
   const options = modelArgs(kind, request);
   let delivered = Boolean(inline);
   let started = inline
-    ? startAgent(name, kind, pane, [...options, inline], INLINE_START_TIMEOUT_MS)
+    ? startAgent(name, kind, pane, [...options, ...inline], INLINE_START_TIMEOUT_MS)
     : startAgent(name, kind, pane, options, START_TIMEOUT_MS);
 
   // The agent rejected the inline prompt rather than failing to start; try
