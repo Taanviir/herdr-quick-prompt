@@ -6,7 +6,7 @@
   "description": "Herdr plugin: pick a coding agent, type a prompt, launch it in a new tab",
   "license": "MIT",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=18"
