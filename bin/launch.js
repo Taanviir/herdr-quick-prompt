@@ -19,8 +19,8 @@ const START_RETRY_MS = 400;
 const START_TIMEOUT_MS = 15000;
 // An agent handed its prompt inline goes straight to work on it and may never
 // look ready to Herdr, while a launch argument Herdr refuses comes back within
-// milliseconds. A short wait tells the two apart.
-const INLINE_START_TIMEOUT_MS = 3000;
+// milliseconds. A short wait tells the two apart. Herdr refuses 3000 or less.
+const INLINE_START_TIMEOUT_MS = 3500;
 const READY_TIMEOUT_MS = 120000;
 const READY_POLL_MS = 400;
 const READY_POLLS = 40;

@@ -119,7 +119,7 @@ test("an inline prompt gets a short start timeout, and a timeout there means it 
   const { calls, records, notifications } = timedOutLaunch("fix the login bug");
   const starts = calls.filter((args) => args[1] === "start");
   assert.equal(starts.length, 1);
-  assert.equal(starts[0][starts[0].indexOf("--timeout") + 1], "3000");
+  assert.equal(starts[0][starts[0].indexOf("--timeout") + 1], "3500");
   assert.equal(starts[0].at(-1), "fix the login bug");
   assert.equal(calls.some((args) => args[1] === "prompt"), false, "nothing is typed on top of it");
   assert.deepEqual(notifications, []);
