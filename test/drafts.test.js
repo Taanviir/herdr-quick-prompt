@@ -41,6 +41,13 @@ test("esc keeps a typed prompt as the draft, and an empty box forgets it", () =>
   assert.equal(reopened.drafts(), null, "whitespace is not worth keeping, and the draft it opened goes");
 });
 
+test("ctrl+c keeps a typed prompt as the draft too", () => {
+  const ui = picker();
+  ui.evaluate("state.prompt = new Editor('typed, then ctrl+c')");
+  ui.evaluate('onKey("\\x03", { ctrl: true, name: "c" })');
+  assert.equal(ui.drafts()?.prompt, "typed, then ctrl+c");
+});
+
 test("a kept draft reopens where it left off and launching clears it", () => {
   const ui = picker({ kind: "codex", prompt: "carry on", destination: "workspace", cwd: "/tmp/child" });
   assert.equal(ui.evaluate("state.prompt.text"), "carry on");
