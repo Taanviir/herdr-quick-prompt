@@ -63,22 +63,9 @@ function failure(message, logged = message) {
   return Object.assign(new HerdrError(message), { logged });
 }
 
-// Names must match [a-z][a-z0-9_-]{0,31} and be unique among live agents.
-function uniqueName(kind) {
-  const taken = new Set();
-  const res = run(["agent", "list"], { check: false });
-  for (const agent of res.result?.agents ?? []) {
-    if (agent.name) taken.add(agent.name);
-  }
-
-  const base = `qp-${kind}`.slice(0, 30);
-  if (!taken.has(base)) return base;
-  for (let n = 2; n < 100; n += 1) {
-    const candidate = `${base}-${n}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-  return `${base}-${Date.now().toString(36).slice(-4)}`;
-}
+// Names must match [a-z][a-z0-9_-]{0,31} and be unique among live agents. The
+// pane is unique already, so no lookup is needed and two launches cannot race.
+const agentName = (kind, pane) => `qp-${kind}-${pane}`.toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 32);
 
 // Deliberately unlabelled. A label taken from the prompt is a snapshot of the
 // first second and wrong by the second minute; agents publish their own live
@@ -216,11 +203,11 @@ function main() {
   if (request.followUp) return followUp(request.followUp, prompt);
   const { kind } = request;
 
-  const name = uniqueName(kind);
   // From here on the agent is addressed by its pane. Herdr accepts either, and
   // an `agent start` that times out may never have registered the name.
   opened = createTarget(request);
   const { pane } = opened;
+  const name = agentName(kind, pane);
 
   const inline = inlineArgs(kind, prompt);
   timing?.note({ inline: Boolean(inline) });
