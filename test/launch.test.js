@@ -7,7 +7,7 @@ const { test } = require("node:test");
 const { load, timedOutLaunch, failedLaunch, worktreeLaunch, launchOf } = require("./support/helpers");
 
 test("structured readiness errors preserve their code and do not restart an agent", () => {
-  const wrapper = load("lib/herdr.js", {
+  const wrapper = load("lib/shared/herdr.js", {
     "node:child_process": {
       spawnSync: () => ({ status: 1, stderr: JSON.stringify({
         error: { code: "agent_not_ready", message: "Agent needs attention" },
@@ -19,7 +19,7 @@ test("structured readiness errors preserve their code and do not restart an agen
   assert.equal(result.message, "Agent needs attention");
   let calls = 0;
   const launcher = load("bin/launch.js", {
-    "../lib/herdr": { run: () => { calls++; return result; } },
+    "../lib/shared/herdr": { run: () => { calls++; return result; } },
   }, "try {\n  main();");
   const started = launcher.evaluate('startAgent("qp-test", "test", "pane", [])');
   assert.equal(started.started, true);
@@ -125,7 +125,7 @@ test("a failed launch records why in startup.jsonl, without the prompt or the ag
     "node:fs": { readFileSync: () => JSON.stringify({ kind: "codex", prompt: "PRIVATE PROMPT", followUp: { target: "w1:p2", title: "PRIVATE TITLE" } }) },
     "../lib/state": { finishRequest: () => {} },
     "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), note() {}, finish: (...args) => records.push(args) }) },
-    "../lib/herdr": { HerdrError: Error, notify: () => {}, run: () => ({ ok: false, code: "agent_blocked", message: "agent is blocked" }) },
+    "../lib/shared/herdr": { HerdrError: Error, notify: () => {}, run: () => ({ ok: false, code: "agent_blocked", message: "agent is blocked" }) },
   }, "try {\n  main();");
   followUp.context.process.argv = ["node", "launch.js", "/tmp/mock-request.json"];
   followUp.context.process.exit = () => {};
@@ -167,7 +167,7 @@ test("a multiline prompt is typed in when the agent cannot be pointed at a file"
     "node:fs": { readFileSync: () => JSON.stringify({ kind: "cursor", prompt: "one\ntwo" }) },
     "../lib/timing": { createTiming: () => null },
     "../lib/agents": { supportsInlinePrompt: () => true, readsPromptFile: () => false },
-    "../lib/herdr": {
+    "../lib/shared/herdr": {
       run: (args) => {
         if (args[0] === "tab") return { ok: true, result: { root_pane: { pane_id: "test-pane" } } };
         if (args[1] === "start") starts.push(args);
@@ -189,7 +189,7 @@ test("a typed-in prompt waits for the agent to start on it, and only a stall is 
     const calls = [];
     const slept = [];
     const launcher = load("bin/launch.js", {
-      "../lib/herdr": {
+      "../lib/shared/herdr": {
         HerdrError: Error,
         run: (args) => {
           calls.push(args);
@@ -227,7 +227,7 @@ test("a typed-in prompt waits for the agent to start on it, and only a stall is 
 test("a launch argument Herdr cannot encode is not retried", () => {
   let calls = 0;
   const launcher = load("bin/launch.js", {
-    "../lib/herdr": {
+    "../lib/shared/herdr": {
       run: () => {
         calls++;
         return { ok: false, code: "invalid_agent_argument", message: "agent arguments cannot be encoded safely for the target shell" };
@@ -249,7 +249,7 @@ test("launcher finalizes recovery correctly on success, startup failure, and del
       "../lib/state": { finishRequest: (file, success) => finished.push({ file, success }), logCrash: () => {} },
       "../lib/timing": { createTiming: () => ({ measure: (_, fn) => fn(), note() {}, finish() {} }) },
       "../lib/agents": { supportsInlinePrompt: () => scenario === "success" },
-      "../lib/herdr": {
+      "../lib/shared/herdr": {
         HerdrError: Error,
         notify: (...args) => notifications.push(args),
         run: (args) => {
@@ -308,7 +308,7 @@ test("the worker logs a bug to crash.log, and leaves Herdr refusing to startup.j
       "../lib/state": { finishRequest: () => {}, logCrash: (error) => crashes.push(error) },
       "../lib/timing": { createTiming: () => null },
       "../lib/agents": { supportsInlinePrompt: () => false },
-      "../lib/herdr": {
+      "../lib/shared/herdr": {
         HerdrError,
         notify: () => {},
         run: (args) => {
@@ -347,7 +347,7 @@ test("model flags go ahead of the inline prompt and survive falling back to typi
       "../lib/state": { writePromptFile: () => "/state/p.md" },
       "../lib/timing": { createTiming: () => null },
       "../lib/agents": { supportsInlinePrompt: () => true, readsPromptFile: () => true, promptFileArgs: (_, file) => [`read ${file}`] },
-      "../lib/herdr": {
+      "../lib/shared/herdr": {
         run: (args) => {
           if (args[0] === "tab") return { ok: true, result: { root_pane: { pane_id: "test-pane" } } };
           if (args[1] === "start") {
@@ -375,7 +375,7 @@ test("the launcher sends the preset's prefix and postfix around the typed prompt
     }) },
     "../lib/timing": { createTiming: () => null },
     "../lib/agents": { supportsInlinePrompt: () => false },
-    "../lib/herdr": {
+    "../lib/shared/herdr": {
       run: (args) => args[0] === "tab"
         ? { ok: true, result: { root_pane: { pane_id: "test-pane" } } }
         : { ok: true, result: {} },
@@ -400,7 +400,7 @@ test("the worker sends a follow-up to the running agent without starting anythin
       }) },
       "../lib/state": { finishRequest: (file, success) => finished.push(success) },
       "../lib/timing": { createTiming: () => null },
-      "../lib/herdr": {
+      "../lib/shared/herdr": {
         HerdrError: Error,
         notify: (...args) => notifications.push(args),
         run: (args) => {
@@ -457,7 +457,7 @@ test("a busy new pane is retried quickly at first, then every 400ms", () => {
   const slept = [];
   let busy = 5;
   const launcher = load("bin/launch.js", {
-    "../lib/herdr": { run: () => (busy-- > 0 ? { ok: false, code: "agent_pane_busy", message: "pane is busy" } : { ok: true, result: {} }) },
+    "../lib/shared/herdr": { run: () => (busy-- > 0 ? { ok: false, code: "agent_pane_busy", message: "pane is busy" } : { ok: true, result: {} }) },
   }, "try {\n  main();");
   launcher.context.sleep = (ms) => slept.push(ms);
   assert.equal(launcher.evaluate('startAgent("qp-claude-w1-p1", "claude", "w1:p1", [], 15000)').started, true);
@@ -466,7 +466,7 @@ test("a busy new pane is retried quickly at first, then every 400ms", () => {
 
 test("every herdr call has a deadline: its own --timeout plus slack, or 30s", () => {
   const seen = [];
-  const herdr = load("lib/herdr.js", {
+  const herdr = load("lib/shared/herdr.js", {
     "node:child_process": { spawnSync: (_, args, options) => { seen.push(options.timeout); return { status: 0, stdout: "{}" }; } },
   }).context.module.exports;
   herdr.run(["tab", "create"]);
@@ -476,7 +476,7 @@ test("every herdr call has a deadline: its own --timeout plus slack, or 30s", ()
 });
 
 test("a herdr call that hangs says so", () => {
-  const herdr = load("lib/herdr.js", {
+  const herdr = load("lib/shared/herdr.js", {
     "node:child_process": { spawnSync: () => ({ error: Object.assign(new Error("spawnSync herdr ETIMEDOUT"), { code: "ETIMEDOUT" }) }) },
   }).context.module.exports;
   assert.equal(herdr.run(["agent", "list"], { check: false }).message, "herdr agent list did not answer in time");

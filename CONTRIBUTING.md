@@ -38,15 +38,15 @@ testing the published copy.
 | `lib/picker/actions.js` | Launching, following up, saving a note, keeping the draft, quitting |
 | `lib/picker/editing.js` | The editing keys the prompt and the directory field share |
 | `bin/launch.js` | Detached worker: creates the tab, split, workspace or worktree, starts the agent, delivers the prompt; or sends a follow-up |
-| `lib/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
+| `lib/shared/herdr.js` | Herdr CLI wrapper — every call goes through `HERDR_BIN_PATH` |
 | `lib/agents.js` | Agent catalog and its cache, which kinds take an inline prompt or a prompt file, the agent running in a pane |
-| `lib/executables.js` | What is on `PATH`, one sweep per directory |
+| `lib/shared/executables.js` | What is on `PATH`, one sweep per directory |
 | `lib/models.js` | Models and efforts per kind for `ctrl+o`, and the launch flags they become |
-| `lib/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
+| `lib/shared/editor.js` | The prompt buffer: grapheme clusters, wrapping, cursor |
 | `lib/history.js` | Walking earlier prompts with `↑`/`↓`, keeping the unsent draft aside |
-| `lib/text.js` | Terminal-cell width and paste sanitising |
-| `lib/ui.js` | Colours, padding, truncation, path shortening |
-| `lib/clipboard.js` | Reading the system clipboard for `ctrl+v` |
+| `lib/shared/text.js` | Terminal-cell width and paste sanitising |
+| `lib/shared/ui.js` | Colours, padding, truncation, path shortening |
+| `lib/shared/clipboard.js` | Reading the system clipboard for `ctrl+v` |
 | `lib/dropped.js` | Copying dropped files that would not survive until the agent reads them |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/running.js` | The running agents behind `ctrl+r`, waiting ones first |
@@ -59,7 +59,7 @@ testing the published copy.
 
 **Never measure text with `.length`.** Width and cursor arithmetic is in
 terminal cells, not UTF-16 units — CJK is two cells wide, an emoji is one
-grapheme of several code units, a combining accent is zero. `lib/text.js` owns
+grapheme of several code units, a combining accent is zero. `lib/shared/text.js` owns
 this; everything else goes through `displayWidth` and `clusters`.
 
 **The picker must not move its working directory.** The manifest launches it as

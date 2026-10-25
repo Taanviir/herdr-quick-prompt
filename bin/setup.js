@@ -6,7 +6,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { run, notify, BIN } = require("../lib/herdr");
+const { run, notify, BIN } = require("../lib/shared/herdr");
 const { spawnSync } = require("node:child_process");
 
 const PLUGIN_ID = "taanviir.quick-prompt";

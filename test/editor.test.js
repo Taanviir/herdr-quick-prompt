@@ -5,8 +5,8 @@ const { test } = require("node:test");
 const { picker } = require("./support/helpers");
 
 test("directory viewport follows the cursor through a long Unicode path", () => {
-  const { Editor } = require("../lib/editor");
-  const { displayWidth } = require("../lib/text");
+  const { Editor } = require("../lib/shared/editor");
+  const { displayWidth } = require("../lib/shared/text");
   const editor = new Editor("/projects/" + "界".repeat(40) + "/tail");
   let view = editor.viewport(20);
   assert.ok(view.text.endsWith("/tail"));
@@ -22,7 +22,7 @@ test("directory viewport follows the cursor through a long Unicode path", () => 
 });
 
 test("vertical navigation keeps a preferred column through short and wrapped lines", () => {
-  const { Editor } = require("../lib/editor");
+  const { Editor } = require("../lib/shared/editor");
   const editor = new Editor("abcdef\nx\nabcdef");
   editor.moveVertical(-1, 20);
   assert.equal(editor.cursor, 8);
@@ -47,7 +47,7 @@ test("vertical navigation keeps a preferred column through short and wrapped lin
 });
 
 test("the prompt is wrapped once per edit and width, and the caret still follows the cursor", () => {
-  const { Editor } = require("../lib/editor");
+  const { Editor } = require("../lib/shared/editor");
   const editor = new Editor("abcdefghij");
   let wraps = 0;
   const wrap = editor.wrap.bind(editor);
@@ -85,7 +85,7 @@ test("history walks back to the oldest entry and forward to the draft it set asi
 });
 
 test("a paste far larger than the call stack lands whole, at the cursor", () => {
-  const { Editor } = require("../lib/editor");
+  const { Editor } = require("../lib/shared/editor");
   const editor = new Editor("ab");
   editor.move(-1);
   editor.insert("x".repeat(500000));
@@ -95,7 +95,7 @@ test("a paste far larger than the call stack lands whole, at the cursor", () => 
 });
 
 test("word motion and deletion stop at whitespace from either side", () => {
-  const { Editor } = require("../lib/editor");
+  const { Editor } = require("../lib/shared/editor");
   const editor = new Editor("fix  the bug");
   editor.wordLeft();
   assert.equal(editor.cursor, 9);
@@ -110,7 +110,7 @@ test("word motion and deletion stop at whitespace from either side", () => {
 });
 
 test("a word that runs past the edge moves down whole, and only a word wider than the row is cut", () => {
-  const { Editor } = require("../lib/editor");
+  const { Editor } = require("../lib/shared/editor");
   const typing = new Editor("fix the login bug");
   assert.deepEqual([...typing.layout(10).rows], ["fix the ", "login bug"]);
   assert.deepEqual({ ...typing.layout(10).caret }, { row: 1, col: 9 });

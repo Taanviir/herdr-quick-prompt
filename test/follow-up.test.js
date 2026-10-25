@@ -165,7 +165,7 @@ test("a recovered follow-up whose agent has gone opens as a launch instead", () 
 test("listing running agents is bounded and tells a silent Herdr from an empty list", () => {
   const calls = [];
   const list = (reply) => load("lib/running.js", {
-    "./herdr": { run: (args, options) => { calls.push(options); return reply; } },
+    "./shared/herdr": { run: (args, options) => { calls.push(options); return reply; } },
   }).context.module.exports.runningAgents();
   assert.equal(list({ ok: false, message: "spawnSync herdr ETIMEDOUT" }), null);
   assert.deepEqual([...list({ ok: true, result: { agents: [] } })], []);
