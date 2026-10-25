@@ -84,7 +84,7 @@ test("with nothing installed the chip row says so and points at ctrl+k", () => {
 });
 
 test("the hint line suits the moment: ways to fill an empty prompt, ways to send a typed one", () => {
-  const { displayWidth } = require("../lib/text");
+  const { displayWidth } = require("../lib/shared/text");
   const { parseAgents } = require("../lib/running");
   const ui = picker(null, { runningList: parseAgents({ agents: LISTED }) });
   assert.equal(ui.evaluate("hints(71)"), "ctrl+p presets · ctrl+r follow up · ctrl+g keys");
@@ -108,7 +108,7 @@ test("the hint line suits the moment: ways to fill an empty prompt, ways to send
 });
 
 test("ctrl+g lists every key, and closes again", () => {
-  const { displayWidth } = require("../lib/text");
+  const { displayWidth } = require("../lib/shared/text");
   const ui = picker();
   ui.evaluate("onKey('\\x07', {ctrl: true, name: 'g'})");
   assert.equal(ui.evaluate("state.overlay.type"), "help");
@@ -196,7 +196,7 @@ test("launching records the prompt in history", () => {
       clearDraft: () => null,
       sweepStaleRequests: () => {},
     },
-    "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
+    "../lib/shared/herdr": { spawnDetached: () => {}, notify: () => {} },
   });
   ui.evaluate("state.prompt = new Editor('fix the bug'); launch()");
   assert.deepEqual(recorded.map((entry) => ({ ...entry, model: { ...entry.model } })),
@@ -281,7 +281,7 @@ test("opening the popup prunes old attachments and checks the agents once it has
       },
       runningAgent: async () => assert.fail("only the duplicate action asks for the running agent"),
     },
-    "../lib/herdr": { spawnDetached() {}, notify() {} },
+    "../lib/shared/herdr": { spawnDetached() {}, notify() {} },
   };
   let refreshed = 0;
   const later = [];
@@ -307,7 +307,7 @@ test("opening the popup prunes old attachments and checks the agents once it has
 });
 
 test("kitty protocol keys come back as the legacy bytes readline knows", () => {
-  const { legacyKeys } = require("../lib/keys");
+  const { legacyKeys } = require("../lib/shared/keys");
   assert.equal(legacyKeys("\x1b[13;2u"), "\n");
   assert.equal(legacyKeys("\x1b[13;5u"), "\n");
   assert.equal(legacyKeys("\x1b[13u"), "\r");

@@ -12,7 +12,7 @@ const { StringDecoder } = require("node:string_decoder");
 
 const { refreshCatalog } = require("../lib/agents");
 const { prune } = require("../lib/dropped");
-const { KITTY_ON, legacyKeys } = require("../lib/keys");
+const { KITTY_ON, legacyKeys } = require("../lib/shared/keys");
 const { ATTACHMENTS, cachedAgents, useCatalog, lookUpDuplicate } = require("../lib/picker/session");
 const { render, scheduleRender } = require("../lib/picker/render");
 const { onKey, onData } = require("../lib/picker/input");

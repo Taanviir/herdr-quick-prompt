@@ -3,7 +3,7 @@
 // Action entrypoint: resolve where the user is, then open the popup picker
 // there. Bound to a key through [[keys.command]] in config.toml.
 
-const { run } = require("../lib/herdr");
+const { run } = require("../lib/shared/herdr");
 
 function context() {
   try {

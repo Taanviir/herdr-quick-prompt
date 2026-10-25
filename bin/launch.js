@@ -7,7 +7,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { finishRequest, logCrash, writePromptFile } = require("../lib/state");
-const { run: herdrRun, notify, HerdrError } = require("../lib/herdr");
+const { run: herdrRun, notify, HerdrError } = require("../lib/shared/herdr");
 const { createTiming } = require("../lib/timing");
 const { supportsInlinePrompt, readsPromptFile, promptFileArgs } = require("../lib/agents");
 const { modelArgs } = require("../lib/models");

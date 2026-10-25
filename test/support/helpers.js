@@ -6,7 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { createRequire } = require("node:module");
 const { after } = require("node:test");
-const { Editor } = require("../../lib/editor");
+const { Editor } = require("../../lib/shared/editor");
 
 const ROOT = path.resolve(__dirname, "../..");
 const PICKER = path.join(ROOT, "lib", "picker");
@@ -108,7 +108,7 @@ function picker(draft = null, {
       },
     },
     "../lib/running": { ...require("../../lib/running"), runningAgents: () => runningList },
-    "../lib/herdr": { spawnDetached: () => {}, notify: () => {} },
+    "../lib/shared/herdr": { spawnDetached: () => {}, notify: () => {} },
     "../lib/scratchpad": scratchpad,
     "../lib/dirs": {
       expand: (value) => value,
@@ -118,7 +118,7 @@ function picker(draft = null, {
       ...dirs,
     },
     "../lib/worktree": { ...require("../../lib/worktree"), insideRepo: (dir) => dir === "/repo" },
-    "../lib/clipboard": { readClipboard: () => clipboard() },
+    "../lib/shared/clipboard": { readClipboard: () => clipboard() },
   }, { ...(running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {}), ...env });
   return Object.assign(ui, { dir, state: api, drafts: () => api.readDraft()?.draft ?? null });
 }
@@ -144,7 +144,7 @@ function timedOutLaunch(prompt, { kind = "claude", inline = true, promptFile = f
       readsPromptFile: () => promptFile,
       promptFileArgs: (_, file) => ["--add-dir=/state/prompts", `read ${file}`],
     },
-    "../lib/herdr": {
+    "../lib/shared/herdr": {
       HerdrError: Error,
       notify: (...args) => notifications.push(args),
       run: (args) => {
@@ -180,7 +180,7 @@ function failedLaunch(destination, startReply, { deliver = () => {} } = {}) {
     "../lib/timing": { createTiming: () => null },
     "../lib/agents": { supportsInlinePrompt: () => false },
     "../lib/worktree": { branchName: () => "fix-the-login-bug", uniqueBranch: (_, name) => name, worktreeBase: () => null },
-    "../lib/herdr": {
+    "../lib/shared/herdr": {
       HerdrError: Error,
       notify: (...args) => notifications.push(args),
       run: (args) => {
@@ -221,7 +221,7 @@ function worktreeLaunch(request, { originHead = null, env = {} } = {}) {
     "node:fs": { readFileSync: () => JSON.stringify({ kind: "claude", destination: "worktree", cwd: "/repo", ...request }) },
     "../lib/timing": { createTiming: () => null },
     "../lib/agents": { supportsInlinePrompt: () => true },
-    "../lib/herdr": {
+    "../lib/shared/herdr": {
       run: (args) => {
         calls.push(args);
         if (args[0] === "worktree") return { ok: true, result: { root_pane: { pane_id: "w2:p1" } } };
@@ -245,7 +245,7 @@ function launchOf(request) {
     "../lib/timing": { createTiming: () => null },
     "../lib/agents": { supportsInlinePrompt: () => true },
     "../lib/worktree": { branchName: () => "fix-it", uniqueBranch: (_, name) => name, worktreeBase: () => null },
-    "../lib/herdr": {
+    "../lib/shared/herdr": {
       HerdrError: Error,
       notify: (...args) => notifications.push(args),
       run: (args) => {

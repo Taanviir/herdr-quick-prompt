@@ -68,7 +68,7 @@ test("the key that opens a list closes it, and esc clears a filter before closin
 });
 
 test("ctrl+o picks a model and effort for the selected agent only", () => {
-  const { displayWidth } = require("../lib/text");
+  const { displayWidth } = require("../lib/shared/text");
   const ui = picker();
   ui.evaluate("state.agent = state.agents.findIndex((a) => a.kind === 'codex')");
   assert.doesNotMatch(ui.evaluate("destinationRow(71)"), /model|ctrl+o/, "the default model leaves the row to the path");
@@ -114,7 +114,7 @@ test("a preset selects its agent, shows itself, and comes off when picked again 
 });
 
 test("a preset can choose the model and destination, and the list shows what it sends", () => {
-  const { displayWidth } = require("../lib/text");
+  const { displayWidth } = require("../lib/shared/text");
   const fast = { name: "fast", agent: "claude", prefix: "Be quick about this one, and do not overthink it.", postfix: "Reply in one line.",
     task: "ask", model: "sonnet", effort: "low", destination: "right" };
   const tree = { name: "tree", agent: null, prefix: "", postfix: "", task: "ask", model: null, effort: null, destination: "worktree" };
