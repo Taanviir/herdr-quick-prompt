@@ -463,3 +463,21 @@ test("a busy new pane is retried quickly at first, then every 400ms", () => {
   assert.equal(launcher.evaluate('startAgent("qp-claude-w1-p1", "claude", "w1:p1", [], 15000)').started, true);
   assert.deepEqual(slept, [50, 100, 200, 400, 400]);
 });
+
+test("every herdr call has a deadline: its own --timeout plus slack, or 30s", () => {
+  const seen = [];
+  const herdr = load("lib/herdr.js", {
+    "node:child_process": { spawnSync: (_, args, options) => { seen.push(options.timeout); return { status: 0, stdout: "{}" }; } },
+  }).context.module.exports;
+  herdr.run(["tab", "create"]);
+  herdr.run(["agent", "start", "x", "--timeout", "15000"]);
+  herdr.run(["agent", "list"], { timeout: 500 });
+  assert.deepEqual(seen, [30000, 20000, 500]);
+});
+
+test("a herdr call that hangs says so", () => {
+  const herdr = load("lib/herdr.js", {
+    "node:child_process": { spawnSync: () => ({ error: Object.assign(new Error("spawnSync herdr ETIMEDOUT"), { code: "ETIMEDOUT" }) }) },
+  }).context.module.exports;
+  assert.equal(herdr.run(["agent", "list"], { check: false }).message, "herdr agent list did not answer in time");
+});
