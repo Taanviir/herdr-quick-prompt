@@ -123,11 +123,11 @@ test("Scratchpad is found from the catalog's PATH sweep, or by its one name befo
 });
 
 test("ctrl+v tries the reader that worked last, Windows' first under bare WSL, and none not on PATH", async () => {
-  const cache = {};
+  const stateDir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-clipboard-"));
+  scratch.push(stateDir);
   const tried = [];
   const clipboard = (PATH, env, working) => load("lib/clipboard.js", {
     "./executables": { onPath: (command) => (PATH ? PATH.includes(command) : null) },
-    "./state": { readCache: (name) => cache[name] ?? null, writeCache: (name, value) => { cache[name] = value; } },
     "node:child_process": {
       execFile: (command, _, __, done) => {
         tried.push(command);
@@ -136,7 +136,7 @@ test("ctrl+v tries the reader that worked last, Windows' first under bare WSL, a
         return { stdin: { end() {} } };
       },
     },
-  }, null, env).context.module.exports;
+  }, null, { HERDR_PLUGIN_STATE_DIR: stateDir, ...env }).context.module.exports;
   const order = (PATH, env, remembered) => [...clipboard(PATH, env).readers(env, remembered)].map((reader) => reader.command);
 
   const desktop = { WAYLAND_DISPLAY: "wayland-0" };
@@ -150,7 +150,7 @@ test("ctrl+v tries the reader that worked last, Windows' first under bare WSL, a
   const reader = clipboard(null, desktop, "powershell.exe");
   assert.equal(await reader.readClipboard(), "copied");
   assert.deepEqual(tried, ["wl-paste", "xclip", "xsel", "pbpaste", "powershell.exe"]);
-  assert.deepEqual({ ...cache.clipboard }, { command: "powershell.exe" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(stateDir, "clipboard.json"), "utf8")), { command: "powershell.exe" });
   tried.length = 0;
   assert.equal(await clipboard(null, desktop, "powershell.exe").readClipboard(), "copied");
   assert.deepEqual(tried, ["powershell.exe"], "the next popup goes straight to it");
