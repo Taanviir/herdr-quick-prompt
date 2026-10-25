@@ -55,6 +55,10 @@ testing the published copy.
 | `lib/scratchpad.js` | Saving a prompt as a Scratchpad note for `ctrl+s` |
 | `lib/presets.js` | Reading and checking `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
 
+`lib/shared/` is the same in Scratchpad, and this repo holds the master copy.
+After editing it, run `node tools/sync-shared.js` to copy it into
+`../herdr-scratchpad`; `test/shared.test.js` fails in either repo until you do.
+
 ## Things that will bite you
 
 **Never measure text with `.length`.** Width and cursor arithmetic is in
