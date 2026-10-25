@@ -15,7 +15,9 @@ const { composePrompt } = require("../lib/presets");
 const { branchName, uniqueBranch, worktreeBase } = require("../lib/worktree");
 
 const START_ATTEMPTS = 12;
-const START_RETRY_MS = 400;
+// A new tab's shell is usually up within a few hundred milliseconds, so the
+// first retries come quickly and only later ones wait the full 400ms.
+const startRetryMs = (attempt) => Math.min(400, 50 * 2 ** attempt);
 const START_TIMEOUT_MS = 15000;
 // An agent handed its prompt inline goes straight to work on it and may never
 // look ready to Herdr, while a launch argument Herdr refuses comes back within
@@ -173,7 +175,7 @@ function startAgent(name, kind, pane, agentArgs, timeoutMs) {
       return { started: true, ready: false, message: last };
     }
     if (!/pane|shell|prompt|busy|not_available/i.test(reason)) break;
-    sleep(START_RETRY_MS);
+    sleep(startRetryMs(attempt));
   }
 
   return { started: false, message: last };

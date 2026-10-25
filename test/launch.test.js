@@ -452,3 +452,14 @@ test("an agent is named after its pane, without asking Herdr which names are tak
   assert.equal(start[2], "qp-claude-w9-p1");
   assert.equal(calls.some((args) => args[0] === "agent" && args[1] === "list"), false);
 });
+
+test("a busy new pane is retried quickly at first, then every 400ms", () => {
+  const slept = [];
+  let busy = 5;
+  const launcher = load("bin/launch.js", {
+    "../lib/herdr": { run: () => (busy-- > 0 ? { ok: false, code: "agent_pane_busy", message: "pane is busy" } : { ok: true, result: {} }) },
+  }, "try {\n  main();");
+  launcher.context.sleep = (ms) => slept.push(ms);
+  assert.equal(launcher.evaluate('startAgent("qp-claude-w1-p1", "claude", "w1:p1", [], 15000)').started, true);
+  assert.deepEqual(slept, [50, 100, 200, 400, 400]);
+});
