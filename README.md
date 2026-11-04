@@ -64,6 +64,7 @@ description = "Quick Prompt with the focused agent"
 | `ctrl+u` / `ctrl+y` | clear the prompt / bring it back |
 | `ctrl+g` | list every key |
 | `esc` | close, keeping what you typed |
+| `alt+←` `alt+→` | switch to Prompt, Notes or Projects, keeping the folder |
 
 In a list, the key that opened it closes it again, and `esc` clears what you
 typed to filter it before it closes the list.

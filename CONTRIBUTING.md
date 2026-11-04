@@ -47,6 +47,9 @@ testing the published copy.
 | `lib/shared/text.js` | Terminal-cell width and paste sanitising |
 | `lib/shared/ui.js` | Colours, padding, truncation, path shortening |
 | `lib/shared/clipboard.js` | Reading the system clipboard for `ctrl+v` |
+| `lib/shared/term.js` | Not used here: the popup loop the other plugins run on |
+| `lib/shared/tabs.js` | The Prompt · Notes · Projects strip, and switching between them |
+| `lib/shared/switch.js` | Detached: opens the popup a switch asked for, once this one has gone |
 | `lib/dropped.js` | Copying dropped files that would not survive until the agent reads them |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/running.js` | The running agents behind `ctrl+r`, waiting ones first |
@@ -55,9 +58,9 @@ testing the published copy.
 | `lib/scratchpad.js` | Saving a prompt as a Scratchpad note for `ctrl+s` |
 | `lib/presets.js` | Reading and checking `presets.json` from `HERDR_PLUGIN_CONFIG_DIR`, and wrapping a prompt in a preset |
 
-`lib/shared/` is the same in Scratchpad, and this repo holds the master copy.
-After editing it, run `node tools/sync-shared.js` to copy it into
-`../herdr-scratchpad`; `test/shared.test.js` fails in either repo until you do.
+`lib/shared/` is the same in Scratchpad and Projects, and this repo holds the
+master copy. After editing it, run `node tools/sync-shared.js` to copy it into
+the sibling checkouts; `test/shared.test.js` fails in each repo until you do.
 
 ## Things that will bite you
 
