@@ -83,7 +83,7 @@ function picker(draft = null, {
   running = null, runningList = [], requests = [], recents = [], history = [], presets = [], dirs = {}, clipboard = async () => null,
   installed = ["claude", "codex", "copilot", "cursor", "gemini"], prefs = { recents },
   env = {}, scratchpad = { available: () => false, save: () => ({ ok: true, message: "" }) },
-  tabs = { ...require("../../lib/shared/tabs"), switchTo: () => {} },
+  tabs = { ...require("../../lib/shared/tabs"), switchTo: (tab, where, leave) => leave() },
 } = {}) {
   const { dir, api } = stateIn("qp-picker-");
   fs.writeFileSync(path.join(dir, "prefs.json"), JSON.stringify(prefs));

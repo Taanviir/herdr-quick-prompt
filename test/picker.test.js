@@ -221,7 +221,13 @@ test("modifier keys from Linux, Windows and macOS terminals edit by word", () =>
 
 test("alt+← and alt+→ switch to the next tab of the strip, keeping the prompt as a draft", () => {
   const switched = [];
-  const tabs = { ...require("../lib/shared/tabs"), switchTo: (tab, where) => switched.push({ id: tab.id, ...where }) };
+  const tabs = {
+    ...require("../lib/shared/tabs"),
+    switchTo: (tab, where, leave) => {
+      leave();
+      switched.push({ id: tab.id, ...where });
+    },
+  };
   const ui = picker(null, { env: { QUICK_PROMPT_WORKSPACE: "w1", QUICK_PROMPT_PANE: "w1:p2" }, tabs });
   ui.evaluate("state.prompt = new Editor('half a thought'); onKey(undefined, {name: 'right', meta: true})");
   assert.deepEqual(switched, [{ id: "notes", cwd: "/tmp", workspace: "w1", pane: "w1:p2" }]);
