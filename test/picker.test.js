@@ -208,7 +208,6 @@ test("modifier keys from Linux, Windows and macOS terminals edit by word", () =>
   const keys = (list) => ui.evaluate(`state.prompt = new Editor('one two three'); ${list}; state.prompt`);
   const cursorAfter = (list) => keys(list).cursor;
   assert.equal(cursorAfter("onMainKey(undefined, {name: 'left', ctrl: true})"), 8);
-  assert.equal(cursorAfter("onMainKey(undefined, {name: 'left', meta: true})"), 8);
   assert.equal(cursorAfter("onMainKey(undefined, {name: 'b', meta: true})"), 8);
   assert.equal(cursorAfter("onMainKey(undefined, {name: 'home'}); onMainKey(undefined, {name: 'f', meta: true})"), 3);
   assert.equal(cursorAfter("onMainKey(undefined, {name: 'home'}); onMainKey(undefined, {name: 'right', ctrl: true})"), 3);
@@ -218,6 +217,17 @@ test("modifier keys from Linux, Windows and macOS terminals edit by word", () =>
   ui.evaluate("openDirectories(); state.overlay.input = new Editor('/tmp/a b')");
   ui.evaluate("onDirsKey(undefined, {name: 'backspace', meta: true})");
   assert.equal(ui.evaluate("state.overlay.input.text"), "/tmp/a ");
+});
+
+test("alt+← and alt+→ switch to the next tab of the strip, keeping the prompt as a draft", () => {
+  const switched = [];
+  const tabs = { ...require("../lib/shared/tabs"), switchTo: (tab, where) => switched.push({ id: tab.id, ...where }) };
+  const ui = picker(null, { env: { QUICK_PROMPT_WORKSPACE: "w1", QUICK_PROMPT_PANE: "w1:p2" }, tabs });
+  ui.evaluate("state.prompt = new Editor('half a thought'); onKey(undefined, {name: 'right', meta: true})");
+  assert.deepEqual(switched, [{ id: "notes", cwd: "/tmp", workspace: "w1", pane: "w1:p2" }]);
+  assert.equal(ui.drafts().prompt, "half a thought");
+  ui.evaluate("onKey(undefined, {name: 'left', meta: true})");
+  assert.equal(switched[1].id, "projects", "left from the first tab wraps to the last");
 });
 
 test("backslash-Enter, alt+Enter and ctrl+j add a newline while plain Enter launches", () => {

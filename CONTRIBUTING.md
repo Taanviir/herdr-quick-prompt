@@ -48,6 +48,8 @@ testing the published copy.
 | `lib/shared/ui.js` | Colours, padding, truncation, path shortening |
 | `lib/shared/clipboard.js` | Reading the system clipboard for `ctrl+v` |
 | `lib/shared/term.js` | Not used here: the popup loop the other plugins run on |
+| `lib/shared/tabs.js` | The Prompt · Notes · Projects strip, and switching between them |
+| `lib/shared/switch.js` | Detached: opens the popup a switch asked for, once this one has gone |
 | `lib/dropped.js` | Copying dropped files that would not survive until the agent reads them |
 | `lib/dirs.js` | Directory suggestions and path completion for `ctrl+d` |
 | `lib/running.js` | The running agents behind `ctrl+r`, waiting ones first |
