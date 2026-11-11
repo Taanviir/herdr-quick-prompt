@@ -150,13 +150,50 @@ test("ctrl+v tries the reader that worked last, Windows' first under bare WSL, a
   const reader = clipboard(null, desktop, "powershell.exe");
   assert.equal(await reader.readClipboard(), "copied");
   assert.deepEqual(tried, ["wl-paste", "xclip", "xsel", "pbpaste", "powershell.exe"]);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(stateDir, "clipboard.json"), "utf8")), { command: "powershell.exe" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(stateDir, "clipboard.json"), "utf8")), { read: "powershell.exe" });
   tried.length = 0;
   assert.equal(await clipboard(null, desktop, "powershell.exe").readClipboard(), "copied");
   assert.deepEqual(tried, ["powershell.exe"], "the next popup goes straight to it");
   tried.length = 0;
   assert.equal(await clipboard([], desktop, "xclip").readClipboard(), null);
   assert.deepEqual(tried, [], "nothing on PATH, nothing spawned");
+});
+
+test("copying tries the writer that worked last, waits for it to exit, and remembers it beside the reader", async () => {
+  const stateDir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "qp-clipboard-"));
+  scratch.push(stateDir);
+  fs.writeFileSync(path.join(stateDir, "clipboard.json"), JSON.stringify({ read: "wl-paste" }));
+  const tried = [];
+  const { EventEmitter } = require("node:events");
+  const clipboard = (env, working) => load("lib/shared/clipboard.js", {
+    "./executables": { onPath: () => null },
+    "node:child_process": {
+      spawn: (command) => {
+        const child = new EventEmitter();
+        child.stdin = {
+          on() {},
+          end: (text) => {
+            tried.push([command, text]);
+            setImmediate(() => child.emit("exit", command === working ? 0 : 1));
+          },
+        };
+        return child;
+      },
+    },
+  }, null, { HERDR_PLUGIN_STATE_DIR: stateDir, ...env }).context.module.exports;
+
+  const desktop = { WAYLAND_DISPLAY: "wayland-0" };
+  assert.deepEqual([...clipboard(desktop).writers(desktop)].map((w) => w.command), ["wl-copy", "xclip", "xsel", "pbcopy", "powershell.exe"]);
+  assert.equal([...clipboard({}).writers({ WSL_DISTRO_NAME: "Ubuntu" })][0].command, "powershell.exe");
+
+  assert.equal(await clipboard(desktop, "xsel").writeClipboard("note"), true);
+  assert.deepEqual(tried.map(([command]) => command), ["wl-copy", "xclip", "xsel"]);
+  assert.deepEqual(tried.at(-1), ["xsel", "note"]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(stateDir, "clipboard.json"), "utf8")), { read: "wl-paste", write: "xsel" });
+  tried.length = 0;
+  assert.equal(await clipboard(desktop, "xsel").writeClipboard("again"), true);
+  assert.deepEqual(tried, [["xsel", "again"]], "the next popup goes straight to it");
+  assert.equal(await clipboard(desktop, "nothing").writeClipboard("x"), false);
 });
 
 test("looking up the running agent is bounded and gives up quietly", async () => {
