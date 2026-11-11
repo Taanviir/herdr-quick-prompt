@@ -61,6 +61,7 @@ description = "Quick Prompt with the focused agent"
 | `ctrl+r` | follow up on an agent that is already running |
 | `ctrl+s` | not now: save the prompt to [Scratchpad](https://github.com/Taanviir/herdr-scratchpad) as a note |
 | `ctrl+v` | paste from the system clipboard |
+| `alt+c` | copy the prompt to the system clipboard |
 | `ctrl+u` / `ctrl+y` | clear the prompt / bring it back |
 | `ctrl+g` | list every key |
 | `esc` | close, keeping what you typed |
@@ -186,7 +187,7 @@ Everything lives in the plugin state directory, normally
 | `draft-*.json` | unsent and failed prompts, one per file, dropped after a day |
 | `attachments/` | copied screenshots, deleted after a week |
 | `catalog.json` | the agents Herdr supports and which are installed, so the popup opens without asking again |
-| `clipboard.json` | which clipboard tool worked for `ctrl+v` |
+| `clipboard.json` | which clipboard tools worked for `ctrl+v` and `alt+c` |
 | `startup.jsonl` | launch timings, and why a launch failed, without prompt text |
 | `crash.log` | errors from the popup and the launcher |
 

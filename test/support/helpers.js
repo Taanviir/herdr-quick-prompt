@@ -80,7 +80,7 @@ function stateIn(prefix) {
 // The picker over a state directory of its own, starting from `draft` when
 // given. `ui.state` reads and writes that directory as the picker does.
 function picker(draft = null, {
-  running = null, runningList = [], requests = [], recents = [], history = [], presets = [], dirs = {}, clipboard = async () => null,
+  running = null, runningList = [], requests = [], recents = [], history = [], presets = [], dirs = {}, clipboard = async () => null, copied = null,
   installed = ["claude", "codex", "copilot", "cursor", "gemini"], prefs = { recents },
   env = {}, scratchpad = { available: () => false, save: () => ({ ok: true, message: "" }) },
   tabs = { ...require("../../lib/shared/tabs"), switchTo: (tab, where, leave) => leave() },
@@ -119,7 +119,7 @@ function picker(draft = null, {
       ...dirs,
     },
     "../lib/worktree": { ...require("../../lib/worktree"), insideRepo: (dir) => dir === "/repo" },
-    "../lib/shared/clipboard": { readClipboard: () => clipboard() },
+    "../lib/shared/clipboard": { readClipboard: () => clipboard(), writeClipboard: async (text) => (copied ? (copied.push(text), true) : false) },
     "../lib/shared/tabs": tabs,
   }, { ...(running ? { QUICK_PROMPT_DUPLICATE: "1", QUICK_PROMPT_PANE: "w1:p2" } : {}), ...env });
   return Object.assign(ui, { dir, state: api, drafts: () => api.readDraft()?.draft ?? null });

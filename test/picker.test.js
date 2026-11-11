@@ -113,7 +113,7 @@ test("ctrl+g lists every key, and closes again", () => {
   ui.evaluate("onKey('\\x07', {ctrl: true, name: 'g'})");
   assert.equal(ui.evaluate("state.overlay.type"), "help");
   const text = ui.evaluate("helpBody(71, 16)").lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
-  for (const key of ["ctrl+l", "ctrl+s", "shift+⏎", "ctrl+k", "ctrl+t", "ctrl+d", "ctrl+o", "ctrl+p", "ctrl+x", "ctrl+r", "ctrl+v", "ctrl+u", "ctrl+y", "alt+1", "esc"]) {
+  for (const key of ["ctrl+l", "ctrl+s", "shift+⏎", "ctrl+k", "ctrl+t", "ctrl+d", "ctrl+o", "ctrl+p", "ctrl+x", "ctrl+r", "ctrl+v", "alt+c", "ctrl+u", "ctrl+y", "alt+1", "esc"]) {
     assert.ok(text.includes(key), key);
   }
   ui.evaluate("onKey('', {name: 'down'}); onKey('', {name: 'down'})");
@@ -346,6 +346,22 @@ test("ctrl+v says it is pasting without freezing, and pastes at the cursor as it
   await pasted;
   assert.equal(ui.evaluate("state.prompt.text"), "aXYb");
   assert.equal(ui.evaluate("state.notice"), null);
+});
+
+test("alt+c copies the prompt, and says so when there is nothing to copy or no tool", async () => {
+  const copied = [];
+  const ui = picker(null, { copied });
+  await ui.evaluate("onKey('c', {meta: true, name: 'c'})");
+  assert.equal(ui.evaluate("state.notice"), "nothing to copy");
+  ui.evaluate("state.prompt = new Editor('fix the build\\nthen the docs')");
+  await ui.evaluate("onKey('c', {meta: true, name: 'c'})");
+  assert.deepEqual(copied, ["fix the build\nthen the docs"]);
+  assert.equal(ui.evaluate("state.notice"), "copied the prompt");
+  assert.equal(ui.evaluate("state.prompt.text"), "fix the build\nthen the docs", "the prompt stays");
+
+  const none = picker({ kind: "claude", prompt: "hi", cwd: "/tmp/" });
+  await none.evaluate("onKey('c', {meta: true, name: 'c'})");
+  assert.match(none.evaluate("state.notice"), /no clipboard tool/);
 });
 
 test("ctrl+s saves the prompt to Scratchpad from its directory and closes", () => {
