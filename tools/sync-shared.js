@@ -16,7 +16,7 @@ const ROOT = path.resolve(__dirname, "..");
 const SHARED = path.join("lib", "shared");
 const SUMS = "checksums.json";
 const TEST = path.join("test", "shared.test.js");
-const PLUGINS = ["herdr-scratchpad", "herdr-projects"];
+const PLUGINS = ["herdr-scratchpad", "herdr-projects", "herdr-render-md"];
 
 function checksums(dir) {
   const names = fs.readdirSync(dir).filter((name) => name !== SUMS).sort();
