@@ -13,8 +13,9 @@ const tab = (id) => TABS.find((candidate) => candidate.id === id);
 
 test("alt+← and alt+→ step through the tabs and wrap; nothing else switches", () => {
   assert.equal(switchFor({ name: "right", meta: true }, "prompt").id, "notes");
-  assert.equal(switchFor({ name: "left", meta: true }, "prompt").id, "projects");
-  assert.equal(switchFor({ name: "right", meta: true }, "projects").id, "prompt");
+  assert.equal(switchFor({ name: "left", meta: true }, "prompt").id, "markdown");
+  assert.equal(switchFor({ name: "right", meta: true }, "projects").id, "markdown");
+  assert.equal(switchFor({ name: "right", meta: true }, "markdown").id, "prompt");
   assert.equal(switchFor({ name: "right", ctrl: true }, "prompt"), null);
   assert.equal(switchFor({ name: "right" }, "prompt"), null);
 });

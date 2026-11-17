@@ -233,7 +233,7 @@ test("alt+← and alt+→ switch to the next tab of the strip, keeping the promp
   assert.deepEqual(switched, [{ id: "notes", cwd: "/tmp", workspace: "w1", pane: "w1:p2" }]);
   assert.equal(ui.drafts().prompt, "half a thought");
   ui.evaluate("onKey(undefined, {name: 'left', meta: true})");
-  assert.equal(switched[1].id, "projects", "left from the first tab wraps to the last");
+  assert.equal(switched[1].id, "markdown", "left from the first tab wraps to the last");
 });
 
 test("backslash-Enter, alt+Enter and ctrl+j add a newline while plain Enter launches", () => {
